@@ -39,11 +39,10 @@
                 android:name="androidx.work.WorkManagerInitializer"
                 android:value="androidx.startup"
                 tools:node="remove" />
-            <!-- WorkManagerInitializer placeholder - will be enabled in Task 10 -->
+            <!-- WorkManagerInitializer - enabled for periodic background sync -->
             <meta-data
                 android:name="com.anyproto.anyfile.di.WorkManagerInitializer"
-                android:value="androidx.startup"
-                tools:node="remove" />
+                android:value="androidx.startup" />
         </provider>
     </application>
 </manifest>
