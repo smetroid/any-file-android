@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package anysync;
+
+option java_multiple_files = true;
+option java_package = "com.anyproto.anyfile.protos";
+
+service FilenodeService {
+  rpc BlockPush(BlockPushRequest) returns (BlockPushResponse);
+  rpc BlockGet(BlockGetRequest) returns (BlockGetResponse);
+  rpc FilesList(FilesListRequest) returns (FilesListResponse);
+  rpc FileGet(FileGetRequest) returns (FileGetResponse);
+  rpc SpaceInfo(SpaceInfoRequest) returns (SpaceInfoResponse);
+}
+
+message BlockPushRequest {
+  string space_id = 1;
+  string file_id = 2;
+  bytes cid = 3;
+  bytes data = 4;
+}
+
+message BlockPushResponse {
+  bool success = 1;
+}
+
+message BlockGetRequest {
+  string space_id = 1;
+  bytes cid = 2;
+}
+
+message BlockGetResponse {
+  bytes data = 1;
+}
+
+message FilesListRequest {
+  string space_id = 1;
+}
+
+message FilesListResponse {
+  repeated string file_ids = 1;
+}
+
+message FileGetRequest {
+  string space_id = 1;
+  string file_id = 2;
+}
+
+message FileGetResponse {
+  string cid = 1;
+  int64 size = 2;
+  int32 version = 3;
+  repeated string cids = 4;
+}
+
+message SpaceInfoRequest {
+  string space_id = 1;
+}
+
+message SpaceInfoResponse {
+  int64 total_usage_bytes = 1;
+  int64 limit_bytes = 2;
+  int32 files_count = 3;
+}

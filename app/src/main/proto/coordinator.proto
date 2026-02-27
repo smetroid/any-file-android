@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package anysync;
+
+option java_multiple_files = true;
+option java_package = "com.anyproto.anyfile.protos";
+
+service CoordinatorService {
+  rpc RegisterPeer(RegisterPeerRequest) returns (RegisterPeerResponse);
+  rpc CreateSpace(CreateSpaceRequest) returns (CreateSpaceResponse);
+  rpc SignSpace(SignSpaceRequest) returns (SignSpaceResponse);
+  rpc NetworkConfiguration(NetworkConfigRequest) returns (NetworkConfigResponse);
+}
+
+message RegisterPeerRequest {
+  string peer_id = 1;
+  string network_id = 2;
+  repeated string addresses = 3;
+  repeated string types = 4;
+}
+
+message RegisterPeerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CreateSpaceRequest {
+  string space_id = 1;
+  string space_type = 2;
+  bytes space_header = 3;
+  string payload = 4;
+  bool force_request = 5;
+}
+
+message CreateSpaceResponse {
+  bytes space_receipt_payload = 1;
+  bytes signature = 2;
+}
+
+message SignSpaceRequest {
+  string space_id = 1;
+  bytes space_header = 2;
+  bool force_request = 3;
+}
+
+message SignSpaceResponse {
+  bytes space_receipt_payload = 1;
+  bytes signature = 2;
+}
+
+message NetworkConfigRequest {}
+
+message NetworkConfigResponse {
+  string network_id = 1;
+  repeated Node nodes = 2;
+}
+
+message Node {
+  string peer_id = 1;
+  repeated string addresses = 2;
+  repeated string types = 3;
+}
