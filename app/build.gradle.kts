@@ -59,6 +59,14 @@ protobuf {
     protoc {
         artifact = "com.google.protobuf:protoc:3.24.0"
     }
+    plugins {
+        create("grpc") {
+            artifact = "io.grpc:protoc-gen-grpc-java:1.56.1"
+        }
+        create("grpckt") {
+            artifact = "io.grpc:protoc-gen-grpc-kotlin:1.3.0:jdk8@jar"
+        }
+    }
     generateProtoTasks {
         all().forEach { task ->
             task.builtins {
@@ -66,6 +74,14 @@ protobuf {
                     option("lite")
                 }
                 create("kotlin") {
+                    option("lite")
+                }
+            }
+            task.plugins {
+                create("grpc") {
+                    option("lite")
+                }
+                create("grpckt") {
                     option("lite")
                 }
             }
@@ -103,7 +119,11 @@ dependencies {
 
     // gRPC
     implementation("io.grpc:grpc-okhttp:1.56.1")
-    implementation("com.google.protobuf:protobuf-kotlin:3.24.0")
+    implementation("io.grpc:grpc-protobuf-lite:1.56.1")
+    implementation("io.grpc:grpc-stub:1.56.1")
+    implementation("com.google.protobuf:protobuf-kotlin-lite:3.24.0")
+    compileOnly("org.apache.tomcat:annotations-api:6.0.53") // required for @Generated annotation from grpc
+    implementation("io.grpc:grpc-kotlin-stub:1.3.0")
 
     // Crypto
     // TODO: Replace with actual crypto library implementations

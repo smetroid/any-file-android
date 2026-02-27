@@ -1,64 +1,184 @@
 syntax = "proto3";
-
-package anysync;
+package filesync;
 
 option java_multiple_files = true;
 option java_package = "com.anyproto.anyfile.protos";
 
-service FilenodeService {
-  rpc BlockPush(BlockPushRequest) returns (BlockPushResponse);
-  rpc BlockGet(BlockGetRequest) returns (BlockGetResponse);
-  rpc FilesList(FilesListRequest) returns (FilesListResponse);
-  rpc FileGet(FileGetRequest) returns (FileGetResponse);
-  rpc SpaceInfo(SpaceInfoRequest) returns (SpaceInfoResponse);
+enum ErrCodes {
+    Unexpected = 0;
+    CIDNotFound = 1;
+    Forbidden = 2;
+    LimitExceeded = 3;
+    QuerySizeExceeded = 4;
+    WrongHash = 5;
+    NotEnoughSpace = 6;
+    AclRecordNotFound = 7;
+    ErrorOffset = 200;
 }
 
-message BlockPushRequest {
-  string space_id = 1;
-  string file_id = 2;
-  bytes cid = 3;
-  bytes data = 4;
+service File {
+    // BlockGet gets one block from a server
+    rpc BlockGet(BlockGetRequest) returns (BlockGetResponse);
+    // BlockPush pushes one block to a server
+    rpc BlockPush(BlockPushRequest) returns (Ok);
+    // BlockPushMany pushes many blocks to a server
+    rpc BlockPushMany(BlockPushManyRequest) returns (Ok);
+   // BlocksCheck checks is CIDs exists
+    rpc BlocksCheck(BlocksCheckRequest) returns (BlocksCheckResponse);
+    // BlocksBind binds CIDs to space
+    rpc BlocksBind(BlocksBindRequest) returns (Ok);
+    // FilesDelete deletes files by id
+    rpc FilesDelete(FilesDeleteRequest) returns (FilesDeleteResponse);
+    // FilesInfo return info by given files id
+    rpc FilesInfo(FilesInfoRequest) returns (FilesInfoResponse);
+    // FilesGet returns a stream that streams all file ids in the space
+    rpc FilesGet(FilesGetRequest) returns (stream FilesGetResponse);
+    // Check checks the connection and credentials
+    rpc Check(CheckRequest) returns (CheckResponse);
+    // SpaceInfo returns usage, limit, etc about space
+    rpc SpaceInfo(SpaceInfoRequest) returns (SpaceInfoResponse);
+    // AccountInfo returns usage, limit, etc by all spaces
+    rpc AccountInfo(AccountInfoRequest) returns (AccountInfoResponse);
+    // AccountLimitSet sets the account file storage limit (available only for nodeconf members)
+    rpc AccountLimitSet(AccountLimitSetRequest) returns (Ok);
+    // SpaceLimitSet sets the space limit. Limit 0 means space will use account limits.
+    rpc SpaceLimitSet(SpaceLimitSetRequest) returns (Ok);
 }
 
-message BlockPushResponse {
-  bool success = 1;
-}
+message Ok {}
 
 message BlockGetRequest {
-  string space_id = 1;
-  bytes cid = 2;
+    string spaceId = 1;
+    bytes cid = 2;
+    bool wait = 3;
 }
 
 message BlockGetResponse {
-  bytes data = 1;
+    bytes cid = 1;
+    bytes data = 2;
 }
 
-message FilesListRequest {
-  string space_id = 1;
+message BlockPushRequest {
+    string spaceId = 1;
+    string fileId = 2;
+    bytes cid = 3;
+    bytes data = 4;
 }
 
-message FilesListResponse {
-  repeated string file_ids = 1;
+message BlockPushManyRequest {
+  repeated FileBlocks fileBlocks = 1;
 }
 
-message FileGetRequest {
-  string space_id = 1;
-  string file_id = 2;
+message FileBlocks {
+  string fileId = 1;
+  string spaceId = 2;
+  repeated Block blocks = 3;
 }
 
-message FileGetResponse {
-  string cid = 1;
-  int64 size = 2;
-  int32 version = 3;
-  repeated string cids = 4;
+message Block {
+  bytes cid = 2;
+  bytes data = 3;
+}
+
+
+message BlocksCheckRequest {
+    string spaceId = 1;
+    repeated bytes cids = 2;
+}
+
+message BlocksCheckResponse {
+    repeated BlockAvailability blocksAvailability = 1;
+}
+
+message BlockAvailability {
+    bytes cid = 1;
+    AvailabilityStatus status = 2;
+}
+
+enum AvailabilityStatus {
+    NotExists = 0;
+    Exists = 1;
+    ExistsInSpace = 2;
+}
+
+message BlocksBindRequest {
+    string spaceId = 1;
+    string fileId = 2;
+    repeated bytes cids = 3;
+}
+
+
+message FilesDeleteRequest {
+    string spaceId = 1;
+    repeated string fileIds = 2;
+}
+
+message FilesDeleteResponse {}
+
+message FilesInfoRequest {
+    string spaceId = 1;
+    repeated string fileIds = 2;
+}
+
+message FilesInfoResponse {
+    repeated FileInfo filesInfo = 1;
+}
+
+message FileInfo {
+    string fileId = 1;
+    uint64 usageBytes = 2;
+    uint32 cidsCount = 3;
+}
+
+message FilesGetRequest {
+    string spaceId = 1;
+}
+
+message FilesGetResponse {
+    string fileId = 1;
+}
+
+
+message CheckRequest {}
+
+message CheckResponse {
+    repeated string spaceIds = 1;
+    bool allowWrite = 2;
 }
 
 message SpaceInfoRequest {
-  string space_id = 1;
+    string spaceId = 1;
 }
 
 message SpaceInfoResponse {
-  int64 total_usage_bytes = 1;
-  int64 limit_bytes = 2;
-  int32 files_count = 3;
+    uint64 limitBytes = 1;
+    uint64 totalUsageBytes = 2;
+    uint64 cidsCount = 3;
+    uint64 filesCount = 4;
+    uint64 spaceUsageBytes = 5;
+    string spaceId = 6;
+}
+
+message AccountInfoRequest {
+}
+
+message AccountInfoResponse {
+    // the shared limit excluding isolated spaces
+    uint64 limitBytes = 1;
+    uint64 totalUsageBytes = 2;
+    uint64 totalCidsCount = 3;
+    repeated SpaceInfoResponse spaces = 4;
+    // the total limit including isolated spaces
+    uint64 accountLimitBytes = 5;
+}
+
+
+message AccountLimitSetRequest {
+    string identity = 1;
+    uint64 limit = 2;
+}
+
+message SpaceLimitSetRequest {
+    string spaceId = 1;
+    uint64 limit = 2;
 }
