@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.anyproto.anyfile.util.ErrorHandler
+import kotlinx.coroutines.launch
 
 /**
  * Settings screen for app configuration
@@ -23,6 +25,21 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val scope = rememberCoroutineScope()
+
+    // Snackbar host state for error messages
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Collect error events
+    LaunchedEffect(Unit) {
+        viewModel.errorEvent.collect { error ->
+            ErrorHandler.showSnackbar(
+                scope = scope,
+                snackbarHostState = snackbarHostState,
+                error = error
+            )
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -33,7 +50,8 @@ fun SettingsScreen(
                     titleContentColor = MaterialTheme.colorScheme.onPrimary
                 )
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -75,7 +93,16 @@ fun SettingsScreen(
                             currentUrl = uiState.coordinatorUrl,
                             onDismiss = { showDialog = false },
                             onConfirm = { newUrl ->
-                                viewModel.updateCoordinatorUrl(newUrl)
+                                scope.launch {
+                                    val result = viewModel.updateCoordinatorUrl(newUrl)
+                                    if (result is SettingsUpdateResult.Error) {
+                                        ErrorHandler.showSnackbar(
+                                            scope = scope,
+                                            snackbarHostState = snackbarHostState,
+                                            error = Exception(result.message)
+                                        )
+                                    }
+                                }
                                 showDialog = false
                             }
                         )
@@ -118,7 +145,16 @@ fun SettingsScreen(
                                     DropdownMenuItem(
                                         text = { Text(interval) },
                                         onClick = {
-                                            viewModel.updateSyncInterval(interval)
+                                            scope.launch {
+                                                val result = viewModel.updateSyncInterval(interval)
+                                                if (result is SettingsUpdateResult.Error) {
+                                                    ErrorHandler.showSnackbar(
+                                                        scope = scope,
+                                                        snackbarHostState = snackbarHostState,
+                                                        error = Exception(result.message)
+                                                    )
+                                                }
+                                            }
                                             expanded = false
                                         }
                                     )
@@ -138,7 +174,18 @@ fun SettingsScreen(
                     description = "Show detailed sync logs",
                     icon = Icons.Default.Info,
                     checked = uiState.debugLoggingEnabled,
-                    onCheckedChange = { viewModel.toggleDebugLogging(it) }
+                    onCheckedChange = { enabled ->
+                        scope.launch {
+                            val result = viewModel.toggleDebugLogging(enabled)
+                            if (result is SettingsUpdateResult.Error) {
+                                ErrorHandler.showSnackbar(
+                                    scope = scope,
+                                    snackbarHostState = snackbarHostState,
+                                    error = Exception(result.message)
+                                )
+                            }
+                        }
+                    }
                 )
 
                 SettingSwitch(
@@ -146,7 +193,18 @@ fun SettingsScreen(
                     description = "Show detailed sync progress",
                     icon = Icons.Default.Visibility,
                     checked = uiState.verboseSyncStatus,
-                    onCheckedChange = { viewModel.toggleVerboseSyncStatus(it) }
+                    onCheckedChange = { enabled ->
+                        scope.launch {
+                            val result = viewModel.toggleVerboseSyncStatus(enabled)
+                            if (result is SettingsUpdateResult.Error) {
+                                ErrorHandler.showSnackbar(
+                                    scope = scope,
+                                    snackbarHostState = snackbarHostState,
+                                    error = Exception(result.message)
+                                )
+                            }
+                        }
+                    }
                 )
             }
 

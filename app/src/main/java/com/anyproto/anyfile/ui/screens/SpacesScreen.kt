@@ -18,6 +18,8 @@ import com.anyproto.anyfile.ui.theme.StatusConflict
 import com.anyproto.anyfile.ui.theme.StatusError
 import com.anyproto.anyfile.ui.theme.StatusIdle
 import com.anyproto.anyfile.ui.theme.StatusSyncing
+import com.anyproto.anyfile.util.ErrorHandler
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
@@ -32,6 +34,23 @@ fun SpacesScreen(
 ) {
     val spaces by viewModel.spaces.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val scope = rememberCoroutineScope()
+
+    // Snackbar host state for error messages
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Collect error events
+    LaunchedEffect(Unit) {
+        viewModel.errorEvent.collect { error ->
+            ErrorHandler.showSnackbar(
+                scope = scope,
+                snackbarHostState = snackbarHostState,
+                error = error,
+                actionLabel = "Retry",
+                onAction = { viewModel.refreshAllSpaces() }
+            )
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -49,7 +68,8 @@ fun SpacesScreen(
             ) {
                 Icon(Icons.Default.Refresh, contentDescription = "Refresh all")
             }
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Box(
             modifier = Modifier

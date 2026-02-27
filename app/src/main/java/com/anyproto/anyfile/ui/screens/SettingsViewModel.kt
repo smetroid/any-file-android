@@ -5,13 +5,25 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.anyproto.anyfile.util.ErrorHandler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+/**
+ * Result of a settings update operation
+ */
+sealed class SettingsUpdateResult {
+    object Success : SettingsUpdateResult()
+    data class Error(val message: String) : SettingsUpdateResult()
+}
 
 /**
  * ViewModel for SettingsScreen
@@ -38,31 +50,86 @@ class SettingsViewModel @Inject constructor(
     )
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
-    fun updateCoordinatorUrl(url: String) {
-        viewModelScope.launch {
+    /**
+     * Flow for error messages to display in UI
+     */
+    private val _errorEvent = MutableSharedFlow<Throwable>()
+    val errorEvent: SharedFlow<Throwable> = _errorEvent.asSharedFlow()
+
+    /**
+     * Update coordinator URL
+     */
+    fun updateCoordinatorUrl(url: String): SettingsUpdateResult {
+        return try {
             prefs.edit().putString(KEY_COORDINATOR_URL, url).apply()
             _uiState.value = _uiState.value.copy(coordinatorUrl = url)
+            SettingsUpdateResult.Success
+        } catch (e: Exception) {
+            handleError(e, "updateCoordinatorUrl")
+            SettingsUpdateResult.Error("Failed to save coordinator URL")
         }
     }
 
-    fun updateSyncInterval(interval: String) {
-        viewModelScope.launch {
+    /**
+     * Update sync interval
+     */
+    fun updateSyncInterval(interval: String): SettingsUpdateResult {
+        return try {
             prefs.edit().putString(KEY_SYNC_INTERVAL, interval).apply()
             _uiState.value = _uiState.value.copy(syncInterval = interval)
+            SettingsUpdateResult.Success
+        } catch (e: Exception) {
+            handleError(e, "updateSyncInterval")
+            SettingsUpdateResult.Error("Failed to save sync interval")
         }
     }
 
-    fun toggleDebugLogging(enabled: Boolean) {
-        viewModelScope.launch {
+    /**
+     * Toggle debug logging
+     */
+    fun toggleDebugLogging(enabled: Boolean): SettingsUpdateResult {
+        return try {
             prefs.edit().putBoolean(KEY_DEBUG_LOGGING, enabled).apply()
             _uiState.value = _uiState.value.copy(debugLoggingEnabled = enabled)
+            SettingsUpdateResult.Success
+        } catch (e: Exception) {
+            handleError(e, "toggleDebugLogging")
+            SettingsUpdateResult.Error("Failed to update debug logging")
         }
     }
 
-    fun toggleVerboseSyncStatus(enabled: Boolean) {
-        viewModelScope.launch {
+    /**
+     * Toggle verbose sync status
+     */
+    fun toggleVerboseSyncStatus(enabled: Boolean): SettingsUpdateResult {
+        return try {
             prefs.edit().putBoolean(KEY_VERBOSE_SYNC, enabled).apply()
             _uiState.value = _uiState.value.copy(verboseSyncStatus = enabled)
+            SettingsUpdateResult.Success
+        } catch (e: Exception) {
+            handleError(e, "toggleVerboseSyncStatus")
+            SettingsUpdateResult.Error("Failed to update verbose sync status")
+        }
+    }
+
+    /**
+     * Clear all settings
+     */
+    fun clearAllSettings(): SettingsUpdateResult {
+        return try {
+            prefs.edit().clear().apply()
+            _uiState.value = SettingsUiState(
+                coordinatorUrl = "",
+                syncInterval = "Manual",
+                debugLoggingEnabled = false,
+                verboseSyncStatus = false,
+                appVersion = getAppVersion(),
+                isDebugBuild = isDebugBuild()
+            )
+            SettingsUpdateResult.Success
+        } catch (e: Exception) {
+            handleError(e, "clearAllSettings")
+            SettingsUpdateResult.Error("Failed to clear settings")
         }
     }
 
@@ -71,6 +138,7 @@ class SettingsViewModel @Inject constructor(
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
             packageInfo.versionName ?: "Unknown"
         } catch (e: Exception) {
+            ErrorHandler.log(e, "getAppVersion")
             "Unknown"
         }
     }
@@ -80,7 +148,18 @@ class SettingsViewModel @Inject constructor(
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
             (packageInfo.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         } catch (e: Exception) {
+            ErrorHandler.log(e, "isDebugBuild")
             false
+        }
+    }
+
+    /**
+     * Handle errors by logging and emitting to error event flow
+     */
+    private fun handleError(error: Throwable, context: String) {
+        ErrorHandler.log(error, "Error in $context")
+        viewModelScope.launch {
+            _errorEvent.emit(error)
         }
     }
 

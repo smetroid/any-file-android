@@ -19,6 +19,8 @@ import com.anyproto.anyfile.ui.theme.StatusConflict
 import com.anyproto.anyfile.ui.theme.StatusError
 import com.anyproto.anyfile.ui.theme.StatusIdle
 import com.anyproto.anyfile.ui.theme.StatusSyncing
+import com.anyproto.anyfile.util.ErrorHandler
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
@@ -34,7 +36,26 @@ fun FilesScreen(
     val files by viewModel.files.collectAsState()
     val spaceName by viewModel.spaceName.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
+    val scope = rememberCoroutineScope()
 
+    // Snackbar host state for error messages
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Collect error events
+    LaunchedEffect(Unit) {
+        viewModel.errorEvent.collect { error ->
+            ErrorHandler.showSnackbar(
+                scope = scope,
+                snackbarHostState = snackbarHostState,
+                error = error,
+                actionLabel = "Retry",
+                onAction = { viewModel.retry() }
+            )
+        }
+    }
+
+    // Load files when space ID changes
     LaunchedEffect(spaceId) {
         if (spaceId.isNotEmpty()) {
             viewModel.loadFiles(spaceId)
@@ -66,7 +87,8 @@ fun FilesScreen(
                     titleContentColor = MaterialTheme.colorScheme.onPrimary
                 )
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Box(
             modifier = Modifier
@@ -76,6 +98,9 @@ fun FilesScreen(
             when {
                 spaceId.isEmpty() -> {
                     NoSpaceSelectedState()
+                }
+                uiState.isLoading -> {
+                    LoadingState()
                 }
                 files.isEmpty() -> {
                     EmptyFilesState(
@@ -99,6 +124,33 @@ fun FilesScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Loading state indicator
+ */
+@Composable
+fun LoadingState() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(48.dp),
+                strokeWidth = 4.dp
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Loading files...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
