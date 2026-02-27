@@ -6,6 +6,7 @@ import com.anyproto.anyfile.data.database.dao.SyncedFileDao
 import com.anyproto.anyfile.data.network.FilenodeClient
 import com.anyproto.anyfile.domain.sync.ConflictResolver
 import com.anyproto.anyfile.domain.sync.SyncOrchestrator
+import com.anyproto.anyfile.domain.watch.FileWatcherManager
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -42,5 +43,13 @@ object SyncModule {
             syncedFileDao = syncedFileDao,
             conflictResolver = conflictResolver
         )
+    }
+
+    @Provides
+    @Singleton
+    fun provideFileWatcherManager(
+        syncOrchestrator: SyncOrchestrator
+    ): FileWatcherManager {
+        return FileWatcherManager(syncOrchestrator)
     }
 }
