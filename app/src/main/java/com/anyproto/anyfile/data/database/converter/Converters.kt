@@ -28,12 +28,12 @@ class Converters {
 
     @TypeConverter
     fun fromByteArray(byteArray: ByteArray?): String? {
-        return byteArray?.let { String(it) }
+        return byteArray?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) }
     }
 
     @TypeConverter
     fun toByteArray(data: String?): ByteArray? {
-        return data?.toByteArray()
+        return data?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) }
     }
 
     @TypeConverter
