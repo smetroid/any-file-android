@@ -129,10 +129,7 @@ dependencies {
     implementation("io.grpc:grpc-kotlin-stub:1.3.0")
 
     // Crypto
-    // TODO: Replace with actual crypto library implementations
-    // These dependencies don't exist in public repositories yet
-    // implementation("network.bytefiddler:crypt:0.1.0")
-    // implementation("com.github.blake3:blake3:0.9.0")
+    implementation("com.appmattus.crypto:cryptohash:0.5.0")
 
     // DI
     implementation("com.google.dagger:hilt-android:2.48")
