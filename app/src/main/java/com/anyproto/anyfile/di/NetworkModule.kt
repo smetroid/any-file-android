@@ -2,6 +2,7 @@ package com.anyproto.anyfile.di
 
 import com.anyproto.anyfile.data.network.CoordinatorClient
 import com.anyproto.anyfile.data.network.FilenodeClient
+import com.anyproto.anyfile.data.network.tls.TlsConfigProvider
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -11,7 +12,7 @@ import javax.inject.Singleton
 import dagger.hilt.components.SingletonComponent
 
 /**
- * Network module providing HTTP clients and gRPC clients.
+ * Network module providing HTTP clients, gRPC clients, and TLS configuration.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -43,5 +44,11 @@ object NetworkModule {
     @Singleton
     fun provideFilenodeClient(httpClient: OkHttpClient): FilenodeClient {
         return FilenodeClient(httpClient)
+    }
+
+    @Provides
+    @Singleton
+    fun provideTlsConfigProvider(): TlsConfigProvider {
+        return TlsConfigProvider()
     }
 }
