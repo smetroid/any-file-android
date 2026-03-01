@@ -4,6 +4,9 @@
 *.ap_
 *.aab
 
+# Generated AAR from gomobile
+app/libs/*.aar
+
 # Files for the ART/Dalvik VM
 *.dex
 
