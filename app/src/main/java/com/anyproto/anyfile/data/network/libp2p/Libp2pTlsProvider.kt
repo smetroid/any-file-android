@@ -140,6 +140,9 @@ class Libp2pTlsProvider @Inject constructor(
             sslSocketFactory
         }
 
+        // Variable to hold remote peer ID extracted from certificate
+        var remotePeerId: PeerId? = null
+
         // Create and connect the socket with detailed logging
         val socket = try {
             Log.d(TAG, "Step 1: Creating SSL socket...")
@@ -164,7 +167,7 @@ class Libp2pTlsProvider @Inject constructor(
             socket.startHandshake()
             Log.d(TAG, "TLS handshake completed successfully")
 
-            // Log session details
+            // Log session details and extract remote peer ID
             try {
                 val session = socket.session
                 Log.d(TAG, "=== TLS Session Details ===")
@@ -180,6 +183,14 @@ class Libp2pTlsProvider @Inject constructor(
                     Log.d(TAG, "Peer certificate subject: ${cert.subjectDN}")
                     Log.d(TAG, "Peer certificate issuer: ${cert.issuerDN}")
                     Log.d(TAG, "Peer certificate valid from: ${cert.notBefore} to ${cert.notAfter}")
+
+                    // Extract remote peer ID from certificate's public key
+                    remotePeerId = extractPeerIdFromCertificate(cert)
+                    Log.d(TAG, "=== Remote Peer ID Extracted ===")
+                    Log.d(TAG, "Remote peer ID: ${remotePeerId?.base58}")
+                    remotePeerId?.publicKeyBytes?.let { pk ->
+                        Log.d(TAG, "Remote public key (hex): ${pk.joinToString("") { "%02x".format(it) }}")
+                    }
                 }
                 Log.d(TAG, "=========================")
             } catch (e: Exception) {
@@ -240,7 +251,8 @@ class Libp2pTlsProvider @Inject constructor(
         return Libp2pTlsSocket(
             socket = socket,
             localPeerId = identity.peerId,
-            localKeyPair = identity.keyPair
+            localKeyPair = identity.keyPair,
+            remotePeerId = remotePeerId
         )
     }
 
@@ -283,6 +295,8 @@ class Libp2pTlsProvider @Inject constructor(
         // Get our peer identity
         val identity = getPeerIdentity()
 
+        var remotePeerId: PeerId? = null
+
         val sslSocket: SSLSocket = try {
             val created = sslSocketFactory.createSocket(
                 socket,
@@ -294,6 +308,21 @@ class Libp2pTlsProvider @Inject constructor(
             )
 
             configureTlsSocket(created, host)
+
+            // Force TLS handshake
+            created.startHandshake()
+
+            // Extract remote peer ID from certificate
+            try {
+                val session = created.session
+                if (session.peerCertificates.isNotEmpty()) {
+                    val cert = session.peerCertificates[0] as java.security.cert.X509Certificate
+                    remotePeerId = extractPeerIdFromCertificate(cert)
+                    Log.d(TAG, "Extracted remote peer ID from certificate: ${remotePeerId?.base58}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not extract remote peer ID: ${e.message}", e)
+            }
 
             created
         } catch (e: IOException) {
@@ -313,7 +342,8 @@ class Libp2pTlsProvider @Inject constructor(
         return Libp2pTlsSocket(
             socket = sslSocket,
             localPeerId = identity.peerId,
-            localKeyPair = identity.keyPair
+            localKeyPair = identity.keyPair,
+            remotePeerId = remotePeerId
         )
     }
 
@@ -359,6 +389,95 @@ class Libp2pTlsProvider @Inject constructor(
         } catch (e: Exception) {
             // Log but don't fail - connection may still work
             // In production, you might want to log this to a logging framework
+        }
+    }
+
+    /**
+     * Extract libp2p peer ID from an X.509 certificate.
+     *
+     * The peer ID is derived from the certificate's Ed25519 public key:
+     * 1. Extract the raw public key from the certificate
+     * 2. Compute SHA-256 hash of the public key
+     * 3. Create multihash: [0x12, 0x20, hash...]
+     * 4. Encode to base58
+     *
+     * This matches libp2p's peer ID derivation algorithm.
+     *
+     * @param certificate The X.509 certificate
+     * @return The derived peer ID, or null if extraction fails
+     */
+    private fun extractPeerIdFromCertificate(certificate: java.security.cert.X509Certificate): PeerId? {
+        return try {
+            // Get the public key from the certificate
+            val publicKey = certificate.publicKey
+
+            // Extract raw 32-byte Ed25519 public key
+            val rawPublicKey = when (publicKey) {
+                is com.anyproto.anyfile.data.crypto.Ed25519PublicKey -> {
+                    // Our custom Ed25519 public key class - get raw bytes directly
+                    publicKey.encoded
+                }
+                else -> {
+                    // Standard Java public key - extract encoded bytes
+                    val encoded = publicKey.encoded
+                    Log.d(TAG, "Certificate public key encoded size: ${encoded.size} bytes")
+                    Log.d(TAG, "Public key format: ${publicKey.format}")
+                    Log.d(TAG, "Public key algorithm: ${publicKey.algorithm}")
+                    Log.d(TAG, "Public key encoded (hex): ${encoded.joinToString("") { "%02x".format(it) }}")
+
+                    when {
+                        // Try X.509 encoded Ed25519 public key
+                        // Format: 0x30 [length] 0x30 0x05 0x06 0x03 0x2B 0x65 0x70 0x03 0x21 0x00 [32 bytes]
+                        // The header can vary in length, so we look for the pattern 0x03 0x21 0x00
+                        encoded.size >= 16 && encoded[0] == 0x30.toByte() -> {
+                            // Look for the sequence 0x03 0x21 0x00 which precedes the 32-byte key
+                            var keyOffset = -1
+                            for (i in 0 until encoded.size - 3) {
+                                if (encoded[i] == 0x03.toByte() &&
+                                    encoded[i + 1] == 0x21.toByte() &&
+                                    encoded[i + 2] == 0x00.toByte()) {
+                                    keyOffset = i + 3
+                                    break
+                                }
+                            }
+
+                            if (keyOffset > 0 && encoded.size - keyOffset >= 32) {
+                                Log.d(TAG, "Found Ed25519 key at offset: $keyOffset")
+                                encoded.copyOfRange(keyOffset, keyOffset + 32)
+                            } else {
+                                // Fallback: try last 32 bytes
+                                Log.w(TAG, "Could not find Ed25519 key pattern, using last 32 bytes")
+                                if (encoded.size >= 32) {
+                                    encoded.copyOfRange(encoded.size - 32, encoded.size)
+                                } else {
+                                    Log.e(TAG, "Public key too small: ${encoded.size} bytes")
+                                    return null
+                                }
+                            }
+                        }
+                        // Assume already raw 32 bytes
+                        encoded.size == 32 -> {
+                            Log.d(TAG, "Using raw 32-byte public key")
+                            encoded
+                        }
+                        else -> {
+                            Log.e(TAG, "Unexpected public key encoding: ${encoded.size} bytes")
+                            return null
+                        }
+                    }
+                }
+            }
+
+            // Derive peer ID from raw public key using Libp2pKeyManager
+            keyManager.derivePeerId(rawPublicKey).also {
+                Log.d(TAG, "Extracted peer ID from certificate: ${it.base58}")
+                Log.d(TAG, "  Public key (hex): ${rawPublicKey.joinToString("") { "%02x".format(it) }}")
+                Log.d(TAG, "  Multihash (hex): ${it.multihash.joinToString("") { "%02x".format(it) }}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to extract peer ID from certificate", e)
+            e.printStackTrace()
+            null
         }
     }
 
@@ -522,22 +641,20 @@ class Libp2pTlsProvider @Inject constructor(
     /**
      * Convert a Libp2pKeyPair to java.security.KeyPair.
      *
-     * The Libp2pKeyPair stores keys in PKCS#8 (private) and X.509 (public) format.
-     * This method reconstructs the Java KeyPair from those encoded bytes.
+     * The Libp2pKeyPair stores keys as raw 32-byte arrays (not PKCS#8/X.509).
+     * This method creates a KeyPair using custom Ed25519 key classes that implement
+     * the Java Security interfaces without relying on KeyFactory.
      *
-     * @param libp2pKeyPair The libp2p key pair
+     * This bypasses Android's KeyFactory limitation for Ed25519.
+     *
+     * @param libp2pKeyPair The libp2p key pair with raw 32-byte keys
      * @return java.security.KeyPair for use with TLS
      */
     private fun convertToJavaKeyPair(libp2pKeyPair: Libp2pKeyPair): java.security.KeyPair {
-        val keyFactory = java.security.KeyFactory.getInstance("Ed25519")
-
-        // Reconstruct private key from PKCS#8 format
-        val privateKeySpec = java.security.spec.PKCS8EncodedKeySpec(libp2pKeyPair.privateKey)
-        val privateKey = keyFactory.generatePrivate(privateKeySpec)
-
-        // Reconstruct public key from X.509 format
-        val publicKeySpec = java.security.spec.X509EncodedKeySpec(libp2pKeyPair.publicKey)
-        val publicKey = keyFactory.generatePublic(publicKeySpec)
+        // Libp2pKeyPair stores raw 32-byte keys, not PKCS#8/X.509 encoded
+        // Use helper functions that accept raw keys
+        val privateKey = com.anyproto.anyfile.data.crypto.privateKeyFromRaw(libp2pKeyPair.privateKey)
+        val publicKey = com.anyproto.anyfile.data.crypto.publicKeyFromRaw(libp2pKeyPair.publicKey)
 
         return java.security.KeyPair(publicKey, privateKey)
     }
