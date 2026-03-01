@@ -86,3 +86,13 @@ lint/generated/
 lint/outputs/
 lint/tmp/
 # lint/reports/
+
+# Separate git repositories (any-file Go daemon, any-sync reference)
+any-file/
+any-sync/
+
+# Test files that don't belong in this repo
+test_libp2p_format.go
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
