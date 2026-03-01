@@ -89,3 +89,20 @@ func TestCompatibilityWithGoLibp2p(t *testing.T) {
 
 	t.Logf("Peer IDs match: %s", ourPeer.ID)
 }
+
+func TestDialLocalhost(t *testing.T) {
+	t.Skip("Requires local libp2p server - will test in Android integration")
+
+	privKey := make([]byte, 32)
+	for i := range privKey {
+		privKey[i] = byte(i)
+	}
+
+	conn, err := Dial("127.0.0.1", 1004, privKey, "")
+
+	assert.NoError(t, err, "Dial should not return error")
+	assert.NotNil(t, conn, "Connection should not be nil")
+	if conn != nil {
+		conn.Close()
+	}
+}
