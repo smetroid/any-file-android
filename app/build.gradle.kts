@@ -133,6 +133,7 @@ dependencies {
 
     // Crypto
     implementation("com.appmattus.crypto:cryptohash:0.5.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.81")
 
     // DI
     implementation("com.google.dagger:hilt-android:2.48")
