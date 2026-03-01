@@ -18,19 +18,32 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "com.anyproto.anyfile.HiltTestRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
     }
 
     buildTypes {
+        debug {
+            // Allow cleartext HTTP for emulator testing (10.0.2.2)
+            // See app/src/debug/res/xml/network_security_config.xml
+            isDebuggable = true
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+
+    // Reference network security config for debug builds
+    // This allows cleartext HTTP to 10.0.2.2 for emulator E2E testing
+    sourceSets {
+        getByName("debug") {
+            manifest.srcFile("src/debug/AndroidManifest.xml")
         }
     }
 

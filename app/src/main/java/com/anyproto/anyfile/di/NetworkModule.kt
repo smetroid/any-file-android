@@ -12,7 +12,10 @@ import javax.inject.Singleton
 import dagger.hilt.components.SingletonComponent
 
 /**
- * Network module providing HTTP clients, gRPC clients, and TLS configuration.
+ * Network module providing HTTP clients, P2P clients, gRPC clients, and TLS configuration.
+ *
+ * Note: P2P-based clients (P2PCoordinatorClient, P2PFilenodeClient) are automatically
+ * provided by Hilt via their @Inject constructors with @Singleton scope.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -45,6 +48,11 @@ object NetworkModule {
     fun provideFilenodeClient(httpClient: OkHttpClient): FilenodeClient {
         return FilenodeClient(httpClient)
     }
+
+    // P2P-based clients (correct way to talk to any-sync infrastructure)
+    // These use the full protocol stack: TLS → Handshake → Yamux → DRPC
+    // Note: P2PCoordinatorClient and P2PFilenodeClient are automatically provided by Hilt
+    // via their @Inject constructors with @Singleton scope. No need for explicit @Provides.
 
     @Provides
     @Singleton

@@ -29,20 +29,14 @@
             </intent-filter>
         </activity>
 
-        <!-- Remove WorkManager auto-initialization (will be initialized manually with Hilt) -->
+        <!-- App Startup Initializers -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
             android:exported="false"
             tools:node="merge">
-            <meta-data
-                android:name="androidx.work.WorkManagerInitializer"
-                android:value="androidx.startup"
-                tools:node="remove" />
-            <!-- WorkManagerInitializer - enabled for periodic background sync -->
-            <meta-data
-                android:name="com.anyproto.anyfile.di.WorkManagerInitializer"
-                android:value="androidx.startup" />
+            <!-- Note: WorkManagerInitializer (default) is NOT removed - let it auto-initialize -->
+            <!-- Custom WorkManagerInitializer removed - use default WorkManager initialization -->
         </provider>
     </application>
 </manifest>
