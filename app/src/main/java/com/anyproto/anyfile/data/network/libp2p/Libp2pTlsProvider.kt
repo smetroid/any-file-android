@@ -79,6 +79,14 @@ class Libp2pTlsProvider @Inject constructor(
     private var cachedIdentity: PeerIdentity? = null
 
     /**
+     * Hybrid key manager for RSA-based TLS certificates with Ed25519 peer IDs.
+     * Lazily initialized.
+     */
+    private val hybridKeyManager: HybridKeyManager by lazy {
+        HybridKeyManager(keyManager)
+    }
+
+    /**
      * Get or create the default peer identity for this client.
      *
      * Uses a deterministic key pair derived from a fixed seed,
@@ -122,17 +130,22 @@ class Libp2pTlsProvider @Inject constructor(
         trustAllCerts: Boolean = false,
         useLibp2pTls: Boolean = false
     ): Libp2pTlsSocket {
-        // Get our peer identity
+        // Get our peer identity (Ed25519 for peer ID)
         val identity = getPeerIdentity()
+
         val alpnStatus = if (enableAlpn) ALPN_PROTO_ANY_SYNC else "disabled"
         val trustStatus = if (trustAllCerts) "INSECURE (trust-all)" else "secure"
-        val tlsType = if (useLibp2pTls) "libp2p TLS (mutual auth)" else "standard TLS"
+        val tlsType = if (useLibp2pTls) {
+            "Hybrid TLS (RSA cert + Ed25519 peer ID)"
+        } else {
+            "standard TLS"
+        }
         Log.d(TAG, "Creating TLS socket to $host:$port with peer ID: ${identity.peerId.base58}, ALPN: $alpnStatus, Trust: $trustStatus, Type: $tlsType")
 
         // Get appropriate socket factory based on configuration
         val socketFactory = if (useLibp2pTls) {
             Log.w(TAG, "⚠️ Using libp2p TLS with client certificate presentation")
-            createLibp2pSslSocketFactory(identity.keyPair)
+            createLibp2pSslSocketFactory()
         } else if (trustAllCerts) {
             Log.w(TAG, "⚠️ Using insecure TLS (trusting all certificates) - FOR TESTING ONLY")
             createInsecureSslSocketFactory()
@@ -290,15 +303,29 @@ class Libp2pTlsProvider @Inject constructor(
      */
     fun createTlsSocketOver(
         socket: Socket,
-        host: String
+        host: String,
+        useLibp2pTls: Boolean = false
     ): Libp2pTlsSocket {
-        // Get our peer identity
+        // Get our peer identity (Ed25519 for peer ID)
         val identity = getPeerIdentity()
+
+        // For hybrid TLS, ensure hybrid identity is initialized
+        if (useLibp2pTls) {
+            hybridKeyManager.getOrCreateIdentity()
+        }
+
+        // Get appropriate socket factory based on configuration
+        val socketFactory = if (useLibp2pTls) {
+            Log.d(TAG, "Using hybrid TLS (RSA cert) for existing connection")
+            createLibp2pSslSocketFactory()
+        } else {
+            sslSocketFactory
+        }
 
         var remotePeerId: PeerId? = null
 
         val sslSocket: SSLSocket = try {
-            val created = sslSocketFactory.createSocket(
+            val created = socketFactory.createSocket(
                 socket,
                 host,
                 socket.port,
@@ -549,8 +576,14 @@ class Libp2pTlsProvider @Inject constructor(
     /**
      * Create an SSL socket factory with libp2p TLS mutual authentication.
      *
+     * **Session 24 Update:** Uses hybrid approach with RSA for TLS certificates
+     * and Ed25519 for peer IDs. This works around Conscrypt's Ed25519 PKCS#8
+     * incompatibility while maintaining compatibility with any-sync.
+     *
      * This creates a TLS socket factory that:
-     * - Provides client certificates derived from Ed25519 keys (KeyManager)
+     * - Uses RSA certificates for TLS (Conscrypt compatible)
+     * - Embeds Ed25519-derived peer ID in certificate subject
+     * - Provides client authentication via KeyManager
      * - Validates server certificates (TrustManager)
      *
      * **SECURITY WARNING:** This implementation uses a trust-all TrustManager for testing.
@@ -568,10 +601,10 @@ class Libp2pTlsProvider @Inject constructor(
      *
      * Based on libp2p go-libp2p/p2p/security/tls/identity.go
      *
-     * @param keyPair The Ed25519 key pair for certificate generation
+     * @param keyPair The Ed25519 key pair (used for peer ID only, not TLS)
      * @return SSLSocketFactory with libp2p TLS configuration
      */
-    private fun createLibp2pSslSocketFactory(keyPair: Libp2pKeyPair): SSLSocketFactory {
+    private fun createLibp2pSslSocketFactory(): SSLSocketFactory {
         val sslContext = javax.net.ssl.SSLContext.getInstance(
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 "TLSv1.3"
@@ -580,18 +613,18 @@ class Libp2pTlsProvider @Inject constructor(
             }
         )
 
-        // Convert Libp2pKeyPair to java.security.KeyPair
-        val javaKeyPair = convertToJavaKeyPair(keyPair)
-
-        // Get peer identity for certificate generation
+        // Get peer identity for logging
         val identity = getPeerIdentity()
-        val certificate = Libp2pCertificateGenerator.generateSelfSignedCertificate(
-            keyPair = javaKeyPair,
-            peerId = identity.peerId.base58
-        )
 
-        // Create KeyManager with our certificate
-        val keyManager = Libp2pTlsKeyManager(javaKeyPair, certificate, identity.peerId.base58)
+        // Use hybrid key manager: RSA for TLS, Ed25519 for peer ID
+        val hybridIdentity = hybridKeyManager.getOrCreateIdentity()
+        val keyManager = hybridKeyManager.createKeyManager()
+
+        Log.d(TAG, "=== Using Hybrid TLS Approach (Session 24) ===")
+        Log.d(TAG, "  Ed25519 peer ID: ${identity.peerId.base58}")
+        Log.d(TAG, "  TLS certificate: RSA ${hybridIdentity.rsaKeyPair.public.format}")
+        Log.d(TAG, "  Certificate subject: ${hybridIdentity.certificate.subjectDN}")
+        Log.d(TAG, "  Certificate issuer: ${hybridIdentity.certificate.issuerDN}")
 
         // WARNING: Trust-all TrustManager for testing only
         // In production, implement proper certificate validation:
@@ -632,8 +665,8 @@ class Libp2pTlsProvider @Inject constructor(
             java.security.SecureRandom()
         )
 
-        Log.d(TAG, "Libp2p TLS socket factory created with client certificate")
-        Log.d(TAG, "  Client cert subject: ${certificate.subjectDN}")
+        Log.d(TAG, "Hybrid TLS socket factory created successfully")
+        Log.d(TAG, "========================================")
 
         return sslContext.socketFactory
     }
