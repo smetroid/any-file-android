@@ -1,0 +1,7 @@
+# gomobile build artifacts
+*.aar
+workspace/
+
+# Go temp files
+*.test
+*.out
