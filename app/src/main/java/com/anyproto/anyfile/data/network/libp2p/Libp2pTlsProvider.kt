@@ -434,7 +434,20 @@ class Libp2pTlsProvider @Inject constructor(
      * - Provides client certificates derived from Ed25519 keys (KeyManager)
      * - Validates server certificates (TrustManager)
      *
-     * This is required for libp2p TLS mutual authentication.
+     * **SECURITY WARNING:** This implementation uses a trust-all TrustManager for testing.
+     * In production, libp2p requires proper certificate validation:
+     * - Extract peer ID from server certificate subject CN
+     * - Verify server's peer ID matches expected coordinator/filenode peer ID
+     * - Implement certificate pinning for known infrastructure peers
+     *
+     * This is acceptable for P2P use case because:
+     * - libp2p identities are authenticated at the application layer (Layer 2 handshake)
+     * - Transport encryption is still provided by TLS
+     * - Each peer verifies the other's identity via peer ID cryptographic verification
+     *
+     * TODO: Implement proper server certificate validation (see Task 6: Production Hardening)
+     *
+     * Based on libp2p go-libp2p/p2p/security/tls/identity.go
      *
      * @param keyPair The Ed25519 key pair for certificate generation
      * @return SSLSocketFactory with libp2p TLS configuration
@@ -461,8 +474,15 @@ class Libp2pTlsProvider @Inject constructor(
         // Create KeyManager with our certificate
         val keyManager = Libp2pTlsKeyManager(javaKeyPair, certificate, identity.peerId.base58)
 
-        // Create TrustManager that accepts all certs (for testing)
-        // TODO: In production, verify server certificates properly
+        // WARNING: Trust-all TrustManager for testing only
+        // In production, implement proper certificate validation:
+        // 1. Extract peer ID from certificate subject CN
+        // 2. Verify against expected peer IDs (coordinator, filenode)
+        // 3. Consider certificate pinning for infrastructure peers
+        //
+        // Note: libp2p P2P authentication happens at Layer 2 (any-sync handshake),
+        // so transport-layer certificate validation is less critical than in client-server TLS.
+        // However, proper validation should still be implemented for defense in depth.
         val trustAllCerts = arrayOf<javax.net.ssl.TrustManager>(
             object : javax.net.ssl.X509TrustManager {
                 override fun checkClientTrusted(
