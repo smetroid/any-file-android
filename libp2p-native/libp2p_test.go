@@ -3,6 +3,8 @@ package libp2p_native
 import (
 	"testing"
 
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -64,4 +66,26 @@ func TestCreatePeerDifferentKeys(t *testing.T) {
 
 	assert.NotEqual(t, peer1.ID, peer2.ID, "Different keys should produce different peer IDs")
 	assert.NotEqual(t, peer1.PubKey, peer2.PubKey, "Different keys should produce different public keys")
+}
+
+// TestCompatibilityWithGoLibp2p verifies that our peer IDs are compatible with go-libp2p
+func TestCompatibilityWithGoLibp2p(t *testing.T) {
+	seed := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+	// Create peer using our implementation
+	ourPeer, err := CreatePeer(seed)
+	assert.NoError(t, err, "CreatePeer should not return error")
+
+	// Create peer using go-libp2p
+	// Note: Ed25519 private key in libp2p is 64 bytes (seed + pubKey), not 32
+	privKey, err := crypto.UnmarshalEd25519PrivateKey(ourPeer.PrivKey)
+	assert.NoError(t, err, "Should unmarshal private key from our 64-byte format")
+
+	libp2pID, err := peer.IDFromPrivateKey(privKey)
+	assert.NoError(t, err, "Should create peer ID from private key")
+
+	// Compare peer IDs - this is the critical compatibility test
+	assert.Equal(t, ourPeer.ID, libp2pID.String(), "Peer ID must match go-libp2p format")
+
+	t.Logf("Peer IDs match: %s", ourPeer.ID)
 }
