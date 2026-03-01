@@ -26,6 +26,33 @@ object EmulatorPortForwarding {
     private const val HOST_IP = "10.0.2.2"
 
     /**
+     * Flag to enable proxy mode for testing.
+     * When true, connections go through the TLS proxy (port 6000).
+     * When false, connections go directly to coordinator (port 1004).
+     *
+     * Set this before running tests:
+     * ```kotlin
+     * EmulatorPortForwarding.setUseProxy(true)
+     * ```
+     */
+    @Volatile
+    private var useProxy = false
+
+    /**
+     * Enable or disable proxy mode for testing.
+     *
+     * @param enabled true to connect through proxy (port 6000), false for direct connection (port 1004)
+     */
+    fun setUseProxy(enabled: Boolean) {
+        useProxy = enabled
+    }
+
+    /**
+     * Check if proxy mode is enabled.
+     */
+    fun isUsingProxy(): Boolean = useProxy
+
+    /**
      * Get the coordinator host for use in emulator.
      * Returns the special IP 10.0.2.2 which refers to the host machine.
      */
@@ -33,9 +60,9 @@ object EmulatorPortForwarding {
 
     /**
      * Get the coordinator port for use in emulator.
-     * Returns the actual coordinator port on the host machine.
+     * Returns the proxy port (6000) if proxy mode is enabled, otherwise the actual coordinator port (1004).
      */
-    fun getCoordinatorPort(): Int = 1004
+    fun getCoordinatorPort(): Int = if (useProxy) 6000 else 1004
 
     /**
      * Get the coordinator address (host:port) for use in emulator.
