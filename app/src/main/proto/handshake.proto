@@ -1,0 +1,61 @@
+syntax = "proto3";
+package anyHandshake;
+
+option java_multiple_files = true;
+option java_package = "com.anyproto.anyfile.protos";
+
+// Credentials types
+enum CredentialsType {
+    // SkipVerify using when identity is not required, for example in p2p cases
+    SkipVerify = 0;
+    // SignedPeerIds using a payload containing PayloadSignedPeerIds message
+    SignedPeerIds = 1;
+}
+
+// Credentials message
+message Credentials {
+    CredentialsType type = 1;
+    bytes payload = 2;
+    uint32 version = 3;
+    string clientVersion = 4;
+}
+
+// Signed peer IDs payload
+message PayloadSignedPeerIds {
+    // account identity
+    bytes identity = 1;
+    // sign of (localPeerId + remotePeerId)
+    bytes sign = 2;
+}
+
+// Acknowledgment message
+message Ack {
+    Error error = 1;
+}
+
+// Error types
+enum Error {
+    Null = 0;
+    Unexpected = 1;
+    InvalidCredentials = 2;
+    UnexpectedPayload = 3;
+    SkipVerifyNotAllowed = 4;
+    DeadlineExceeded = 5;
+    IncompatibleVersion = 6;
+    IncompatibleProto = 7;
+}
+
+// Protocol negotiation (optional phase)
+message Proto {
+    ProtoType proto = 1;
+    repeated Encoding encodings = 2;
+}
+
+enum ProtoType {
+    DRPC = 0;
+}
+
+enum Encoding {
+    None = 0;
+    Snappy = 1;
+}
