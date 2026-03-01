@@ -1,8 +1,9 @@
 package com.anyproto.anyfile.e2e
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.anyproto.anyfile.data.network.CoordinatorClient
-import com.anyproto.anyfile.data.network.FilenodeClient
+import com.anyproto.anyfile.data.network.coordinator.SimpleTcpCoordinatorClient
+import com.anyproto.anyfile.data.network.p2p.P2PCoordinatorClient
+import com.anyproto.anyfile.data.network.p2p.P2PFilenodeClient
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
 import kotlinx.coroutines.test.runTest
@@ -17,6 +18,10 @@ import kotlin.test.assertTrue
 
 /**
  * E2E tests that connect to real any-sync infrastructure.
+ *
+ * These tests verify connectivity to any-sync infrastructure using two approaches:
+ * 1. Simple TCP+DRPC (no TLS) - matches Go client's coordinator.Client
+ * 2. Full P2P stack (TLS + Handshake + Yamux + DRPC) - for P2P features
  *
  * Prerequisites:
  * - any-sync infrastructure running on 127.0.0.1:1004-1005
@@ -37,10 +42,13 @@ class InfrastructureTest : E2ETestBase() {
     val hiltRule = HiltAndroidRule(this)
 
     @Inject
-    lateinit var coordinatorClient: CoordinatorClient
+    lateinit var coordinatorClient: P2PCoordinatorClient
 
     @Inject
-    lateinit var filenodeClient: FilenodeClient
+    lateinit var filenodeClient: P2PFilenodeClient
+
+    @Inject
+    lateinit var simpleTcpCoordinatorClient: SimpleTcpCoordinatorClient
 
     @Before
     fun setup() {
@@ -50,11 +58,14 @@ class InfrastructureTest : E2ETestBase() {
 
     // Helper function to initialize both clients (must be called from within runTest)
     private suspend fun initializeClients() {
-        val coordinatorUrl = "http://${EmulatorPortForwarding.getCoordinatorHost()}:${EmulatorPortForwarding.getCoordinatorPort()}"
-        val filenodeUrl = "http://${EmulatorPortForwarding.getFilenodeHost()}:${EmulatorPortForwarding.getFilenodePort()}"
+        val coordinatorHost = EmulatorPortForwarding.getCoordinatorHost()
+        val coordinatorPort = EmulatorPortForwarding.getCoordinatorPort()
+        val filenodeHost = EmulatorPortForwarding.getFilenodeHost()
+        val filenodePort = EmulatorPortForwarding.getFilenodePort()
 
-        coordinatorClient.initialize(coordinatorUrl)
-        filenodeClient.initialize(filenodeUrl)
+        // P2P clients use host:port instead of URL
+        coordinatorClient.initialize(coordinatorHost, coordinatorPort)
+        filenodeClient.initialize(filenodeHost, filenodePort)
     }
 
     @Test
@@ -166,5 +177,68 @@ class InfrastructureTest : E2ETestBase() {
             "Coordinator: ${coordinatorResult.exceptionOrNull()?.message}, " +
             "Filenode: ${filenodeResult.exceptionOrNull()?.message}"
         )
+    }
+
+    // ==================== Simple TCP+DRPC Tests ====================
+    // These tests use plain TCP+DRPC (no TLS, no yamux) to verify
+    // the coordinator accepts simple connections like the Go client does.
+
+    @Test
+    fun testSimpleTcpCoordinatorConnection() = runTest {
+        val host = EmulatorPortForwarding.getCoordinatorHost()
+        val port = EmulatorPortForwarding.getCoordinatorPort()
+
+        simpleTcpCoordinatorClient.initialize(host, port)
+
+        try {
+            val result = simpleTcpCoordinatorClient.getNetworkConfiguration()
+
+            assertTrue(result.isSuccess, "Should connect to coordinator: ${result.exceptionOrNull()?.message}")
+            val config = result.getOrThrow()
+
+            assertNotNull(config.networkId, "Network ID should not be null")
+            assertTrue(config.nodes.isNotEmpty(), "Should have nodes in network")
+        } finally {
+            simpleTcpCoordinatorClient.close()
+        }
+    }
+
+    @Test
+    fun testSimpleTcpRegisterPeer() = runTest {
+        val host = EmulatorPortForwarding.getCoordinatorHost()
+        val port = EmulatorPortForwarding.getCoordinatorPort()
+
+        simpleTcpCoordinatorClient.initialize(host, port)
+
+        try {
+            val result = simpleTcpCoordinatorClient.registerPeer()
+
+            assertTrue(result.isSuccess, "Should register peer: ${result.exceptionOrNull()?.message}")
+            val config = result.getOrThrow()
+
+            assertNotNull(config.networkId, "Network ID should not be null")
+            assertTrue(config.nodes.isNotEmpty(), "Should have nodes in network")
+        } finally {
+            simpleTcpCoordinatorClient.close()
+        }
+    }
+
+    @Test
+    fun testSimpleTcpGetCoordinatorNodes() = runTest {
+        val host = EmulatorPortForwarding.getCoordinatorHost()
+        val port = EmulatorPortForwarding.getCoordinatorPort()
+
+        simpleTcpCoordinatorClient.initialize(host, port)
+
+        try {
+            val result = simpleTcpCoordinatorClient.getCoordinatorNodes()
+
+            assertTrue(result.isSuccess, "Should get coordinator nodes: ${result.exceptionOrNull()?.message}")
+            val nodes = result.getOrThrow()
+
+            assertTrue(nodes.isNotEmpty(), "Should have at least one coordinator node")
+        } finally {
+            simpleTcpCoordinatorClient.close()
+        }
     }
 }
