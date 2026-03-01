@@ -36,7 +36,7 @@ object EmulatorPortForwarding {
      * ```
      */
     @Volatile
-    private var useProxy = false
+    private var useProxy = true  // Enable proxy by default for E2E tests
 
     /**
      * Enable or disable proxy mode for testing.
@@ -62,7 +62,7 @@ object EmulatorPortForwarding {
      * Get the coordinator port for use in emulator.
      * Returns the proxy port (6000) if proxy mode is enabled, otherwise the actual coordinator port (1004).
      */
-    fun getCoordinatorPort(): Int = if (useProxy) 6000 else 1004
+    fun getCoordinatorPort(): Int = if (useProxy) 6100 else 1004
 
     /**
      * Get the coordinator address (host:port) for use in emulator.

@@ -145,7 +145,8 @@ class InfrastructureTest : E2ETestBase() {
         val nodeAddrs = EmulatorPortForwarding.getNodeAddresses()
 
         assertEquals("10.0.2.2", coordinatorHost, "Coordinator host should be 10.0.2.2")
-        assertEquals(1004, coordinatorPort, "Coordinator port should be 1004")
+        // Port depends on whether proxy is enabled (6100) or not (1004)
+        assertTrue(coordinatorPort == 6100 || coordinatorPort == 1004, "Coordinator port should be 6100 (proxy) or 1004 (direct)")
         assertEquals("10.0.2.2", filenodeHost, "Filenode host should be 10.0.2.2")
         assertEquals(1005, filenodePort, "Filenode port should be 1005")
 
@@ -256,7 +257,7 @@ class InfrastructureTest : E2ETestBase() {
             val port = EmulatorPortForwarding.getCoordinatorPort()
 
             assertTrue(EmulatorPortForwarding.isUsingProxy(), "Proxy mode should be enabled")
-            assertEquals(6000, port, "Should use proxy port 6000")
+            assertEquals(6100, port, "Should use proxy port 6100")
 
             simpleTcpCoordinatorClient.initialize(host, port)
 
@@ -276,8 +277,7 @@ class InfrastructureTest : E2ETestBase() {
             }
         } finally {
             simpleTcpCoordinatorClient.close()
-            // Reset proxy mode for other tests
-            EmulatorPortForwarding.setUseProxy(false)
+            // Keep proxy mode enabled for other tests (it's the default now)
         }
     }
 }
