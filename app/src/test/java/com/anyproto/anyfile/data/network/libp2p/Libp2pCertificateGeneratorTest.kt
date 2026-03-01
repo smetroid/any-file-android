@@ -30,7 +30,8 @@ class Libp2pCertificateGeneratorTest {
         assertThat(cert).isNotNull()
         assertThat(cert.subjectX500Principal.name).contains(peerId)
         assertThat(cert.issuerX500Principal.name).contains(peerId)
-        assertThat(cert.publicKey.algorithm).isEqualTo("Ed25519")
+        // Java uses "EdDSA" as the algorithm name for Ed25519 keys
+        assertThat(cert.publicKey.algorithm).isEqualTo("EdDSA")
         assertThat(cert.notBefore.before(cert.notAfter)).isTrue()
     }
 

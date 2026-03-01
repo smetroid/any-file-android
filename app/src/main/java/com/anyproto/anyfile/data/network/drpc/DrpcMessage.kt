@@ -115,14 +115,14 @@ data class DrpcRequest(
             val serviceLengthResult = DrpcEncoding.readVarInt32(data, pos)
             val serviceLength = serviceLengthResult.first
             pos += serviceLengthResult.second
-            val serviceId = String(data, pos, pos + serviceLength, Charsets.UTF_8)
+            val serviceId = String(data, pos, serviceLength, Charsets.UTF_8)
             pos += serviceLength
 
             // Read method ID
             val methodLengthResult = DrpcEncoding.readVarInt32(data, pos)
             val methodLength = methodLengthResult.first
             pos += methodLengthResult.second
-            val methodId = String(data, pos, pos + methodLength, Charsets.UTF_8)
+            val methodId = String(data, pos, methodLength, Charsets.UTF_8)
             pos += methodLength
 
             // Read request payload
@@ -262,7 +262,7 @@ object DrpcEncoding {
      */
     fun writeVarInt32(output: ByteArrayOutputStream, value: Int) {
         var v = value
-        while (v and 0x7F != 0) {
+        while (v > 0x7F) {
             output.write((v and 0x7F) or 0x80)
             v = v ushr 7
         }
