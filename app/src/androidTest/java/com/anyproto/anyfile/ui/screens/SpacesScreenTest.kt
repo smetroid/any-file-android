@@ -53,12 +53,12 @@ class SpacesScreenTest {
         mockSyncOrchestrator = mockk()
 
         // Setup default mock behaviors
-        coEvery { mockSpaceDao.getAllSpaces() } returns flowOf(emptyList())
-        coEvery { mockSpaceDao.getSpaceById(any()) } returns testSpace
-        coEvery { mockSpaceDao.updateSpace(any()) } returns 1
-        coEvery { mockSyncOrchestrator.sync(any()) } returns com.anyproto.anyfile.domain.sync.SyncResult.Success(0)
+        // coEvery { mockSpaceDao.getAllSpaces() } returns flowOf(emptyList())
+        // coEvery { mockSpaceDao.getSpaceById(any()) } returns testSpace
+        // coEvery { mockSpaceDao.updateSpace(any()) } returns 1
+        // coEvery { mockSyncOrchestrator.sync(any()) } returns com.anyproto.anyfile.domain.sync.SyncResult.Success(0)
 
-        mockSpacesViewModel = SpacesViewModel(mockSpaceDao, mockSyncOrchestrator)
+        // mockSpacesViewModel = SpacesViewModel(mockSpaceDao, mockSyncOrchestrator)
     }
 
     @After
