@@ -1,5 +1,6 @@
 package com.anyproto.anyfile.data.network.drpc
 
+import android.util.Log
 import com.anyproto.anyfile.data.network.yamux.YamuxSession
 import com.anyproto.anyfile.data.network.yamux.YamuxStream
 import com.anyproto.anyfile.data.network.yamux.YamuxStreamException
@@ -40,6 +41,8 @@ class DrpcClient @Inject constructor(
     private val session: YamuxSession
 ) {
     companion object {
+        private const val TAG = "DrpcClient"
+
         /**
          * Default timeout for RPC calls in milliseconds.
          */
@@ -109,27 +112,40 @@ class DrpcClient @Inject constructor(
         responseParser: Parser<T>,
         timeoutMs: Long = defaultTimeoutMs
     ): T = withContext(Dispatchers.IO) {
+        Log.d(TAG, "=== DRPC Call: $service.$method ===")
+        Log.d(TAG, "Request type: ${request.javaClass.simpleName}")
+
         val stream = try {
+            Log.d(TAG, "Opening yamux stream for RPC call...")
             session.openStream()
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to open yamux stream", e)
             throw DrpcConnectionException("Failed to open yamux stream for RPC call", e)
         }
 
         try {
             withTimeout(timeoutMs) {
                 // Send the request
+                Log.d(TAG, "Sending DRPC request...")
                 sendRequest(stream, service, method, request)
+                Log.d(TAG, "DRPC request sent successfully")
 
                 // Read and parse the response
-                readResponse(stream, responseParser)
+                Log.d(TAG, "Reading DRPC response...")
+                val response = readResponse(stream, responseParser)
+                Log.d(TAG, "DRPC response received: ${response.javaClass.simpleName}")
+                response
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            Log.e(TAG, "RPC call timed out after ${timeoutMs}ms")
             stream.close()
             throw DrpcTimeoutException("RPC call to $service.$method timed out after ${timeoutMs}ms", e)
         } catch (e: DrpcException) {
+            Log.e(TAG, "DRPC exception: ${e.message}", e)
             stream.close()
             throw e
         } catch (e: Exception) {
+            Log.e(TAG, "RPC call failed", e)
             stream.close()
             throw DrpcConnectionException("RPC call to $service.$method failed", e)
         } finally {

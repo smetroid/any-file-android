@@ -1,5 +1,6 @@
 package com.anyproto.anyfile.data.network.handshake
 
+import android.util.Log
 import com.anyproto.anyfile.data.network.libp2p.Libp2pTlsSocket
 import com.anyproto.anyfile.data.network.libp2p.PeerId
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,8 @@ import java.io.OutputStream
  * Based on the Go implementation in any-sync/net/secureservice/handshake/credential.go
  */
 object AnySyncHandshake {
+
+    private const val TAG = "AnySyncHandshake"
 
     /** Default handshake timeout in milliseconds */
     const val DEFAULT_TIMEOUT_MS = 30000L
@@ -48,39 +51,56 @@ object AnySyncHandshake {
                 val output = socket.socket.outputStream
                 val input = socket.socket.inputStream
 
+                val remotePeerId = socket.remotePeerId ?: PeerId("", byteArrayOf(), byteArrayOf())
+                Log.d(TAG, "=== Starting any-sync Handshake (Client) ===")
+                Log.d(TAG, "Remote peer ID: ${remotePeerId.base58}")
+                Log.d(TAG, "Local peer ID: ${socket.localPeerId.base58}")
+
                 // 1. Send our credentials
-                val localCred = checker.makeCredentials(socket.remotePeerId ?: PeerId("", byteArrayOf(), byteArrayOf()))
+                Log.d(TAG, "Step 1: Creating and sending local credentials...")
+                val localCred = checker.makeCredentials(remotePeerId)
                 writeCredentials(output, localCred)
+                Log.d(TAG, "Local credentials sent: type=${localCred.type}, " +
+                        "payloadSize=${localCred.payload?.size ?: 0}, version=${localCred.version}")
 
                 // 2. Read remote credentials
+                Log.d(TAG, "Step 2: Reading remote credentials...")
                 val remoteFrame = readMessage(input, setOf(HandshakeFrame.MSG_TYPE_CRED))
+                Log.d(TAG, "Remote frame received: type=${remoteFrame.type}, payloadSize=${remoteFrame.payload.size}")
                 val remoteCred = parseCredentials(remoteFrame.payload)
+                Log.d(TAG, "Remote credentials parsed: type=${remoteCred.type}, " +
+                        "payloadSize=${remoteCred.payload?.size ?: 0}, version=${remoteCred.version}")
 
                 // 3. Verify remote credentials
+                Log.d(TAG, "Step 3: Verifying remote credentials...")
                 val result = try {
-                    checker.checkCredential(
-                        socket.remotePeerId ?: PeerId("", byteArrayOf(), byteArrayOf()),
-                        remoteCred
-                    )
+                    checker.checkCredential(remotePeerId, remoteCred)
                 } catch (e: HandshakeProtocolException) {
+                    Log.e(TAG, "Credential verification failed: ${e.message}", e)
                     // Send ack with error
                     writeAck(output, Ack(HandshakeError.INVALID_CREDENTIALS))
                     throw e
                 }
+                Log.d(TAG, "Remote credentials verified successfully")
 
                 // 4. Send ack (success)
+                Log.d(TAG, "Step 4: Sending success ack...")
                 writeAck(output, Ack(HandshakeError.NULL))
 
                 // 5. Read final ack
+                Log.d(TAG, "Step 5: Reading final ack...")
                 val ackFrame = readMessage(input, setOf(HandshakeFrame.MSG_TYPE_ACK))
                 val ack = parseAck(ackFrame.payload)
 
                 if (ack.error != HandshakeError.NULL) {
+                    Log.e(TAG, "Remote peer returned error: ${ack.error}")
                     throw HandshakeProtocolException(
                         "Remote peer returned error: ${ack.error}"
                     )
                 }
 
+                Log.d(TAG, "Step 6: Handshake completed successfully!")
+                Log.d(TAG, "=== any-sync Handshake Complete ===")
                 // 6. Return result with identity
                 result
             }

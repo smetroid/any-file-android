@@ -1,8 +1,9 @@
 package com.anyproto.anyfile.data.network.yamux
 
+import android.util.Log
 import com.anyproto.anyfile.data.network.handshake.AnySyncHandshake
 import com.anyproto.anyfile.data.network.handshake.CredentialChecker
-import com.anyproto.anyfile.data.network.handshake.PeerSignVerifier
+import com.anyproto.anyfile.data.network.handshake.NoVerifyChecker
 import com.anyproto.anyfile.data.network.handshake.SecureSession
 import com.anyproto.anyfile.data.network.libp2p.Libp2pTlsProvider
 import kotlinx.coroutines.CoroutineScope
@@ -55,6 +56,8 @@ class YamuxConnectionManager @Inject constructor(
 ) : CoroutineScope {
 
     companion object {
+        private const val TAG = "YamuxConnectionManager"
+
         /**
          * Default connection timeout in milliseconds.
          */
@@ -77,16 +80,15 @@ class YamuxConnectionManager @Inject constructor(
     override val coroutineContext: CoroutineContext = SupervisorJob() + Dispatchers.IO
 
     /**
-     * Credential checker for any-sync handshake (SignedPeerIds mode).
-     * Created lazily to ensure peer identity is available.
+     * Credential checker for any-sync handshake.
+     *
+     * NOTE: Using NoVerifyChecker for now to match the default behavior
+     * of the Go any-sync coordinator. The Go code uses PeerSignVerifier only
+     * when account check is allowed or node types are configured.
+     *
+     * TODO: Make this configurable to support both modes.
      */
-    private val credentialChecker: CredentialChecker by lazy {
-        val identity = tlsProvider.getPeerIdentity()
-        PeerSignVerifier(
-            localKeyPair = identity.keyPair,
-            localPeerId = identity.peerId
-        )
-    }
+    private val credentialChecker: CredentialChecker = NoVerifyChecker()
 
     /**
      * Cached sessions keyed by "host:port".
@@ -150,8 +152,11 @@ class YamuxConnectionManager @Inject constructor(
 
         // Create new session
         return withContext(Dispatchers.IO) {
+            Log.d(TAG, "=== Creating new Yamux session to $host:$port ===")
+
             try {
                 // Create TLS socket with libp2p peer identity
+                Log.d(TAG, "Step 1: Creating TLS socket...")
                 val libp2pSocket = tlsProvider.createTlsSocket(
                     host = host,
                     port = port,
@@ -160,8 +165,10 @@ class YamuxConnectionManager @Inject constructor(
                     trustAllCerts = false,    // Don't use trust-all
                     useLibp2pTls = true       // Use libp2p TLS with client cert
                 )
+                Log.d(TAG, "TLS socket created successfully")
 
                 // Perform any-sync handshake
+                Log.d(TAG, "Step 2: Performing any-sync handshake...")
                 val secureSession = try {
                     val result = AnySyncHandshake.performOutgoingHandshake(
                         socket = libp2pSocket,
@@ -171,22 +178,28 @@ class YamuxConnectionManager @Inject constructor(
                     // Wrap in SecureSession with peer information
                     SecureSession.fromHandshake(libp2pSocket, result)
                 } catch (e: Exception) {
+                    Log.e(TAG, "Handshake failed with $host:$port", e)
                     libp2pSocket.socket.close()
                     throw YamuxConnectionException("Handshake failed with $host:$port", e)
                 }
+                Log.d(TAG, "any-sync handshake completed successfully")
 
                 // Create yamux session (client mode)
                 // YamuxSession uses the underlying SSLSocket from the authenticated session
+                Log.d(TAG, "Step 3: Creating yamux session...")
                 val session = YamuxSession(secureSession.socket.socket, isClient = true)
 
                 // Cache the session before starting to prevent race conditions
                 cacheSession(key, session, host, port)
 
                 // Start the session (begins frame reading)
+                Log.d(TAG, "Step 4: Starting yamux session frame reader...")
                 session.start()
 
+                Log.d(TAG, "=== Yamux session established successfully ===")
                 session
             } catch (e: Exception) {
+                Log.e(TAG, "Failed to connect to $host:$port", e)
                 throw YamuxConnectionException(
                     "Failed to connect to $host:$port",
                     e

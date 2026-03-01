@@ -380,6 +380,33 @@ data class Libp2pKeyPair(
         result = 31 * result + publicKey.contentHashCode()
         return result
     }
+
+    /**
+     * Encode the Ed25519 public key in protobuf Key format.
+     *
+     * This matches the Go implementation's crypto.PublicKey.Marshall() which
+     * serializes a Key proto message:
+     *
+     * message Key {
+     *     KeyType type = 1;
+     *     bytes data = 2;
+     * }
+     *
+     * For Ed25519 public keys:
+     * - type: ED25519_PUBLIC (enum value 0)
+     * - data: raw 32-byte Ed25519 public key
+     *
+     * This is NOT X.509 encoding - it's a simple protobuf wrapper.
+     *
+     * @return Protobuf-encoded Key message (approximately 36-38 bytes)
+     */
+    fun encodePublicKeyProto(): ByteArray {
+        return com.anyproto.anyfile.protos.Crypto.Key.newBuilder()
+            .setType(com.anyproto.anyfile.protos.Crypto.KeyType.ED25519_PUBLIC)
+            .setData(com.google.protobuf.ByteString.copyFrom(publicKey))
+            .build()
+            .toByteArray()
+    }
 }
 
 /**

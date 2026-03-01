@@ -1,0 +1,15 @@
+syntax = "proto3";
+package crypto;
+
+option java_package = "com.anyproto.anyfile.protos";
+
+enum KeyType {
+    ED25519_PUBLIC = 0;
+    ED25519_PRIVATE = 1;
+    AES = 2;
+}
+
+message Key {
+    KeyType type = 1;
+    bytes data = 2;
+}

@@ -1,5 +1,6 @@
 package com.anyproto.anyfile.data.network.yamux
 
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -46,6 +47,8 @@ class YamuxSession(
 ) : CoroutineScope {
 
     companion object {
+        private const val TAG = "YamuxSession"
+
         /**
          * Maximum number of concurrent streams per session.
          */
@@ -140,10 +143,21 @@ class YamuxSession(
             check(_state == State.ACTIVE) { "Session already started or closed" }
         }
 
+        Log.d(TAG, "=== Starting YamuxSession ===")
+        Log.d(TAG, "Mode: ${if (isClient) "Client" else "Server"}")
+        Log.d(TAG, "Remote: ${socket.inetAddress?.hostAddress}:${socket.port}")
+
         // Start frame reader job
         frameReaderJob = launch {
-            readFramesLoop()
+            try {
+                readFramesLoop()
+            } catch (e: Exception) {
+                Log.e(TAG, "Frame reader loop failed", e)
+                throw e
+            }
         }
+
+        Log.d(TAG, "YamuxSession started, frame reader running")
     }
 
     /**
@@ -155,9 +169,11 @@ class YamuxSession(
     suspend fun openStream(): YamuxStream {
         lock.withLock {
             check(_state == State.ACTIVE) {
+                Log.e(TAG, "Cannot open stream: session is in state ${_state}")
                 throw YamuxSessionException("Cannot open stream in state ${_state}")
             }
             check(streamsMap.size < MAX_STREAMS) {
+                Log.e(TAG, "Cannot open stream: max streams limit reached: $MAX_STREAMS")
                 throw YamuxSessionException("Maximum streams limit reached: $MAX_STREAMS")
             }
         }
@@ -167,12 +183,21 @@ class YamuxSession(
             lock.withLock { nextStreamId += STREAM_ID_INCREMENT }
         }
 
+        Log.d(TAG, "Opening new stream: streamId=$streamId")
+
         // Create stream
         val stream = YamuxStream(streamId, this@YamuxSession)
         lock.withLock { streamsMap[streamId] = stream }
 
         // Initialize stream (sends SYN)
-        stream.initialize()
+        try {
+            stream.initialize()
+            Log.d(TAG, "Stream opened successfully: streamId=$streamId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize stream: streamId=$streamId", e)
+            lock.withLock { streamsMap.remove(streamId) }
+            throw e
+        }
 
         return stream
     }
