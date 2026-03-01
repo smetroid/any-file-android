@@ -327,6 +327,9 @@ suspend fun <T : MessageLite> DrpcClient.coordinatorCall(
 
 /**
  * Convenience extension function to make RPC calls to filenode service.
+ *
+ * Note: The proto defines this as "filesync.File" (package filesync, service File),
+ * not "filenode.Filenode". This matches the actual any-sync filenode implementation.
  */
 suspend fun <T : MessageLite> DrpcClient.filenodeCall(
     method: String,
@@ -334,5 +337,5 @@ suspend fun <T : MessageLite> DrpcClient.filenodeCall(
     responseParser: Parser<T>,
     timeoutMs: Long = DrpcClient.DEFAULT_TIMEOUT_MS
 ): T {
-    return call("filenode.Filenode", method, request, responseParser, timeoutMs)
+    return call("filesync.File", method, request, responseParser, timeoutMs)
 }
