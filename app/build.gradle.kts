@@ -52,6 +52,19 @@ android {
         kotlinCompilerExtensionVersion = "1.5.4"
     }
 
+    packaging {
+        resources {
+            // Exclude duplicate BouncyCastle files
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+            // Exclude other potential duplicates
+            excludes += "META-INF/versions/9/*.MF"
+            excludes += "META-INF/LICENSE*"
+            excludes += "META-INF/NOTICE*"
+            excludes += "META-INF/INDEX.LIST"
+            excludes += "META-INF/io.netty.versions.properties"
+        }
+    }
+
     namespace = "com.anyproto.anyfile"
 }
 

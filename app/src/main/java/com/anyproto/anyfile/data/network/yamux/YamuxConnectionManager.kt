@@ -155,7 +155,10 @@ class YamuxConnectionManager @Inject constructor(
                 val libp2pSocket = tlsProvider.createTlsSocket(
                     host = host,
                     port = port,
-                    timeoutMs = timeoutMs.toInt()
+                    timeoutMs = timeoutMs.toInt(),
+                    enableAlpn = false,      // Disable ALPN for compatibility
+                    trustAllCerts = false,    // Don't use trust-all
+                    useLibp2pTls = true       // Use libp2p TLS with client cert
                 )
 
                 // Perform any-sync handshake
