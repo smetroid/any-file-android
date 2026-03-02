@@ -31,11 +31,11 @@ class PeerSignVerifier(
         val message = (localPeerId.base58 + remotePeerId.base58).toByteArray()
         val signature = Libp2pSignature.sign(localKeyPair.privateKey, message)
 
-        // Create payload with protobuf-encoded public key and signature
-        // IMPORTANT: identity must be protobuf-encoded Key message (matching Go's crypto.PublicKey.Marshall())
-        // The Key proto contains: type=ED25519_PUBLIC, data=raw 32-byte Ed25519 key
+        // Create payload with raw Ed25519 public key and signature
+        // IMPORTANT: identity is raw 32-byte Ed25519 public key (NOT protobuf-encoded)
+        // This matches the any-sync wire format for SignedPeerIds credentials
         val payload = PayloadSignedPeerIds(
-            identity = localKeyPair.encodePublicKeyProto(),  // Protobuf Key message
+            identity = localKeyPair.publicKey,  // Raw 32-byte Ed25519 public key
             sign = signature
         )
 
