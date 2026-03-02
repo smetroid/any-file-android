@@ -63,10 +63,33 @@ object AnySyncHandshake {
                 Log.d(TAG, "Local credentials sent: type=${localCred.type}, " +
                         "payloadSize=${localCred.payload?.size ?: 0}, version=${localCred.version}")
 
-                // 2. Read remote credentials
-                Log.d(TAG, "Step 2: Reading remote credentials...")
-                val remoteFrame = readMessage(input, setOf(HandshakeFrame.MSG_TYPE_CRED))
+                // 2. Read remote credentials or ack
+                // Coordinator can respond with either:
+                // - Credentials (type 1) - if accepting our credentials
+                // - Ack (type 2) - if rejecting our credentials
+                Log.d(TAG, "Step 2: Reading remote response (expecting Credentials or Ack)...")
+                val remoteFrame = readMessage(
+                    input,
+                    setOf(HandshakeFrame.MSG_TYPE_CRED, HandshakeFrame.MSG_TYPE_ACK)
+                )
                 Log.d(TAG, "Remote frame received: type=${remoteFrame.type}, payloadSize=${remoteFrame.payload.size}")
+
+                // Check if coordinator sent an error ack
+                if (remoteFrame.type == HandshakeFrame.MSG_TYPE_ACK) {
+                    val ack = parseAck(remoteFrame.payload)
+                    if (ack.error != HandshakeError.NULL) {
+                        Log.e(TAG, "Coordinator rejected credentials with error: ${ack.error}")
+                        throw HandshakeProtocolException(
+                            "Coordinator rejected credentials: ${ack.error}"
+                        )
+                    }
+                    // Ack with error=NULL - unexpected at this point
+                    throw HandshakeProtocolException(
+                        "Unexpected ACK with NULL error at step 2"
+                    )
+                }
+
+                // Parse credentials
                 val remoteCred = parseCredentials(remoteFrame.payload)
                 Log.d(TAG, "Remote credentials parsed: type=${remoteCred.type}, " +
                         "payloadSize=${remoteCred.payload?.size ?: 0}, version=${remoteCred.version}")

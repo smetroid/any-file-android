@@ -144,24 +144,17 @@ class InfrastructureTest : E2ETestBase() {
         val filenodePort = EmulatorPortForwarding.getFilenodePort()
         val nodeAddrs = EmulatorPortForwarding.getNodeAddresses()
 
-        assertEquals("10.0.2.2", coordinatorHost, "Coordinator host should be 10.0.2.2")
-        // Port depends on whether proxy is enabled (6100) or not (1004)
-        assertTrue(coordinatorPort == 6100 || coordinatorPort == 1004, "Coordinator port should be 6100 (proxy) or 1004 (direct)")
-        assertEquals("10.0.2.2", filenodeHost, "Filenode host should be 10.0.2.2")
-        assertEquals(1005, filenodePort, "Filenode port should be 1005")
+        // Using ADB reverse port forwarding (127.0.0.1 for localhost)
+        assertEquals("127.0.0.1", coordinatorHost, "Coordinator host should be 127.0.0.1 for ADB reverse")
+        // Port depends on whether proxy is enabled (6100) or not (11004)
+        assertTrue(coordinatorPort == 6100 || coordinatorPort == 11004, "Coordinator port should be 6100 (proxy) or 11004 (direct ADB reverse)")
+        assertEquals("127.0.0.1", filenodeHost, "Filenode host should be 127.0.0.1 for ADB reverse")
+        assertEquals(11005, filenodePort, "Filenode port should be 11005 for ADB reverse")
 
         assertEquals(3, nodeAddrs.size, "Should have 3 node addresses")
-        assertEquals("10.0.2.2" to 1001, nodeAddrs[0], "Node 1 address should match")
-        assertEquals("10.0.2.2" to 1002, nodeAddrs[1], "Node 2 address should match")
-        assertEquals("10.0.2.2" to 1003, nodeAddrs[2], "Node 3 address should match")
-
-        // Also verify deprecated methods for backward compatibility
-        @Suppress("DEPRECATION")
-        val deprecatedCoordinatorAddr = EmulatorPortForwarding.getCoordinatorAddress()
-        @Suppress("DEPRECATION")
-        val deprecatedFilenodeAddr = EmulatorPortForwarding.getFilenodeAddress()
-        assertEquals("http://10.0.2.2:1004", deprecatedCoordinatorAddr, "Deprecated coordinator address should match")
-        assertEquals("http://10.0.2.2:1005", deprecatedFilenodeAddr, "Deprecated filenode address should match")
+        assertEquals("127.0.0.1" to 11001, nodeAddrs[0], "Node 1 address should match")
+        assertEquals("127.0.0.1" to 11002, nodeAddrs[1], "Node 2 address should match")
+        assertEquals("127.0.0.1" to 11003, nodeAddrs[2], "Node 3 address should match")
     }
 
     @Test

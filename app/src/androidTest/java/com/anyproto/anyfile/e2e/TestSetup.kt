@@ -3,45 +3,85 @@ package com.anyproto.anyfile.e2e
 /**
  * Handles port forwarding from Android emulator to host machine.
  *
- * The Android emulator can access the host machine via the special IP 10.0.2.2.
- * This is the standard way for emulators to access services running on the host.
+ * This configuration uses ADB reverse port forwarding, which is the most
+ * reliable method for Android emulators to access host machine services.
  *
- * After proper configuration:
- * - Coordinator: 10.0.2.2:1004 (host's coordinator)
- * - Filenode:   10.0.2.2:1005 (host's filenode)
- * - Nodes:      10.0.2.2:1001-1003 (host's nodes)
+ * Required ADB reverse setup (run once before tests):
+ * ```bash
+ * adb reverse tcp:6100 tcp:6100   # TLS proxy (if using proxy mode)
+ * adb reverse tcp:11004 tcp:1004  # Coordinator (direct connection)
+ * adb reverse tcp:11005 tcp:1005  # Filenode
+ * ```
+ *
+ * Port mappings (with ADB reverse):
+ * - Coordinator (via proxy): 127.0.0.1:6100 → host:6100 → host:1004
+ * - Coordinator (direct): 127.0.0.1:11004 → host:1004
+ * - Filenode: 127.0.0.1:11005 → host:1005
+ *
+ * Alternative: Use emulator IP 10.0.2.2 (requires emulator network config)
  *
  * This enables the Android emulator to access the any-sync infrastructure
  * running on the host machine via Docker Compose.
- *
- * Note: ADB reverse port forwarding is an alternative, but using 10.0.2.2
- * is simpler and more reliable for Android emulators.
  */
 object EmulatorPortForwarding {
 
     /**
-     * The special IP address that Android emulators use to refer to the host machine.
-     * This is documented in the Android emulator documentation.
+     * The IP address to use for connecting to the host machine.
+     *
+     * When using ADB reverse port forwarding, we use "127.0.0.1" (localhost)
+     * because adb reverse creates listeners on the device's localhost.
+     *
+     * Alternative: "10.0.2.2" (emulator's special IP for host access)
+     *
+     * Set this via useLocalhost() or useEmulatorIP() before running tests.
      */
-    private const val HOST_IP = "10.0.2.2"
+    @Volatile
+    private var hostIp: String = "127.0.0.1"  // Default to localhost for ADB reverse
 
     /**
      * Flag to enable proxy mode for testing.
-     * When true, connections go through the TLS proxy (port 6000).
-     * When false, connections go directly to coordinator (port 1004).
+     * When true, connections go through the TLS proxy (port 6100).
+     * When false, connections go directly to coordinator (via adb reverse to 11004).
+     *
+     * IMPORTANT: The TLS translation proxy (port 6100) has a known limitation:
+     * It presents its own peer ID to the coordinator during TLS, but the Android
+     * client sends its own peer ID during the any-sync handshake. This causes the
+     * coordinator to reject the credentials (peer ID mismatch).
+     *
+     * For E2E tests to work, we need to use direct connections (useProxy = false)
+     * where the Android client's peer ID matches the TLS peer ID.
      *
      * Set this before running tests:
      * ```kotlin
-     * EmulatorPortForwarding.setUseProxy(true)
+     * EmulatorPortForwarding.setUseProxy(false)
      * ```
      */
     @Volatile
-    private var useProxy = true  // Enable proxy by default for E2E tests
+    private var useProxy = false  // Use direct connections by default (peer ID must match)
+
+    /**
+     * Use localhost (127.0.0.1) for connections.
+     * This works when ADB reverse port forwarding is set up:
+     * - adb reverse tcp:6100 tcp:6100  (proxy)
+     * - adb reverse tcp:11004 tcp:1004 (coordinator)
+     * - adb reverse tcp:11005 tcp:1005 (filenode)
+     */
+    fun useLocalhost() {
+        hostIp = "127.0.0.1"
+    }
+
+    /**
+     * Use emulator's special IP (10.0.2.2) for connections.
+     * This requires the emulator network to be properly configured.
+     */
+    fun useEmulatorIP() {
+        hostIp = "10.0.2.2"
+    }
 
     /**
      * Enable or disable proxy mode for testing.
      *
-     * @param enabled true to connect through proxy (port 6000), false for direct connection (port 1004)
+     * @param enabled true to connect through proxy (port 6100), false for direct connection (port 11004)
      */
     fun setUseProxy(enabled: Boolean) {
         useProxy = enabled
@@ -54,15 +94,16 @@ object EmulatorPortForwarding {
 
     /**
      * Get the coordinator host for use in emulator.
-     * Returns the special IP 10.0.2.2 which refers to the host machine.
+     * Returns localhost when using ADB reverse, or 10.0.2.2 for emulator IP.
      */
-    fun getCoordinatorHost(): String = HOST_IP
+    fun getCoordinatorHost(): String = hostIp
 
     /**
      * Get the coordinator port for use in emulator.
-     * Returns the proxy port (6000) if proxy mode is enabled, otherwise the actual coordinator port (1004).
+     * With proxy: returns 6100 (adb reverse → proxy → coordinator)
+     * Without proxy: returns 11004 (adb reverse → coordinator directly)
      */
-    fun getCoordinatorPort(): Int = if (useProxy) 6100 else 1004
+    fun getCoordinatorPort(): Int = if (useProxy) 6100 else 11004
 
     /**
      * Get the coordinator address (host:port) for use in emulator.
@@ -70,19 +111,20 @@ object EmulatorPortForwarding {
      * @deprecated Use getCoordinatorHost() and getCoordinatorPort() instead.
      */
     @Deprecated("Use getCoordinatorHost() and getCoordinatorPort() instead", ReplaceWith("getCoordinatorHost()", "getCoordinatorPort()"))
-    fun getCoordinatorAddress(): String = "http://$HOST_IP:1004"
+    fun getCoordinatorAddress(): String = "http://$hostIp:${if (useProxy) 6100 else 11004}"
 
     /**
      * Get the filenode host for use in emulator.
-     * Returns the special IP 10.0.2.2 which refers to the host machine.
+     * Returns localhost when using ADB reverse, or 10.0.2.2 for emulator IP.
      */
-    fun getFilenodeHost(): String = HOST_IP
+    fun getFilenodeHost(): String = hostIp
 
     /**
      * Get the filenode port for use in emulator.
-     * Returns the actual filenode port on the host machine.
+     * Returns 11005 for ADB reverse (filenode directly).
+     * Note: Filenode connections don't go through the proxy.
      */
-    fun getFilenodePort(): Int = 1005
+    fun getFilenodePort(): Int = 11005
 
     /**
      * Get the filenode address (host:port) for use in emulator.
@@ -90,33 +132,37 @@ object EmulatorPortForwarding {
      * @deprecated Use getFilenodeHost() and getFilenodePort() instead.
      */
     @Deprecated("Use getFilenodeHost() and getFilenodePort() instead", ReplaceWith("getFilenodeHost()", "getFilenodePort()"))
-    fun getFilenodeAddress(): String = "http://$HOST_IP:1005"
+    fun getFilenodeAddress(): String = "http://$hostIp:11005"
 
     /**
      * Get the node addresses for use in emulator.
-     * Returns list of (host, port) pairs.
+     * Returns list of (host, port) pairs using ADB reverse ports.
      */
     fun getNodeAddresses(): List<Pair<String, Int>> = listOf(
-        HOST_IP to 1001,
-        HOST_IP to 1002,
-        HOST_IP to 1003
+        hostIp to 11001,
+        hostIp to 11002,
+        hostIp to 11003
     )
 
     /**
-     * Setup port forwarding from emulator to host machine.
-     * This is a no-op now since we use 10.0.2.2 directly.
-     * Kept for backward compatibility.
+     * Setup ADB reverse port forwarding from emulator to host machine.
+     *
+     * This should be called before running tests, typically in @Before method.
+     * Note: If port forwarding is already set up, this will silently fail (which is fine).
      */
     fun setup() {
-        // No-op - we use 10.0.2.2 directly
+        // ADB reverse is set up externally via command line
+        // This method is kept for potential programmatic setup in the future
     }
 
     /**
-     * Remove all port forwarding rules.
-     * This is a no-op now since we use 10.0.2.2 directly.
-     * Kept for backward compatibility.
+     * Remove ADB reverse port forwarding rules.
+     *
+     * This can be called after tests are complete to clean up.
      */
     fun cleanup() {
-        // No-op - we use 10.0.2.2 directly
+        // ADB reverse cleanup is typically done manually via:
+        // adb reverse --remove tcp:6100
+        // adb reverse --remove-all
     }
 }

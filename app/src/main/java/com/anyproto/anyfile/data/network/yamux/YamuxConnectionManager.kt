@@ -3,7 +3,7 @@ package com.anyproto.anyfile.data.network.yamux
 import android.util.Log
 import com.anyproto.anyfile.data.network.handshake.AnySyncHandshake
 import com.anyproto.anyfile.data.network.handshake.CredentialChecker
-import com.anyproto.anyfile.data.network.handshake.NoVerifyChecker
+import com.anyproto.anyfile.data.network.handshake.PeerSignVerifier
 import com.anyproto.anyfile.data.network.handshake.SecureSession
 import com.anyproto.anyfile.data.network.libp2p.Libp2pTlsProvider
 import kotlinx.coroutines.CoroutineScope
@@ -82,13 +82,18 @@ class YamuxConnectionManager @Inject constructor(
     /**
      * Credential checker for any-sync handshake.
      *
-     * NOTE: Using NoVerifyChecker for now to match the default behavior
-     * of the Go any-sync coordinator. The Go code uses PeerSignVerifier only
-     * when account check is allowed or node types are configured.
+     * Uses PeerSignVerifier to provide Ed25519 signature-based peer authentication.
+     * This is required by the Go any-sync coordinator which rejects SkipVerify credentials.
      *
-     * TODO: Make this configurable to support both modes.
+     * The credential checker is created lazily to get the peer identity from the TLS provider.
      */
-    private val credentialChecker: CredentialChecker = NoVerifyChecker()
+    private val credentialChecker: CredentialChecker by lazy {
+        val identity = tlsProvider.getPeerIdentity()
+        PeerSignVerifier(
+            localKeyPair = identity.keyPair,
+            localPeerId = identity.peerId
+        )
+    }
 
     /**
      * Cached sessions keyed by "host:port".
@@ -155,15 +160,20 @@ class YamuxConnectionManager @Inject constructor(
             Log.d(TAG, "=== Creating new Yamux session to $host:$port ===")
 
             try {
-                // Create TLS socket with libp2p peer identity
-                Log.d(TAG, "Step 1: Creating TLS socket...")
+                // Determine TLS mode based on port
+                // - Port 6100: TLS translation proxy (use standard X.509 TLS)
+                // - Port 11004: Direct coordinator via ADB reverse (use libp2p TLS)
+                val useProxyPort = (port == 6100)
+                val useLibp2pTls = !useProxyPort  // Use libp2p TLS only for direct connections
+
+                Log.d(TAG, "Step 1: Creating TLS socket (proxy mode: $useProxyPort, libp2p TLS: $useLibp2pTls)...")
                 val libp2pSocket = tlsProvider.createTlsSocket(
                     host = host,
                     port = port,
                     timeoutMs = timeoutMs.toInt(),
-                    enableAlpn = false,      // Disable ALPN for compatibility
-                    trustAllCerts = false,    // Don't use trust-all
-                    useLibp2pTls = true       // Use libp2p TLS with client cert
+                    enableAlpn = !useProxyPort,   // ALPN required for direct coordinator connection
+                    trustAllCerts = useProxyPort,  // Trust proxy's self-signed cert
+                    useLibp2pTls = useLibp2pTls   // Use libp2p TLS for direct connections
                 )
                 Log.d(TAG, "TLS socket created successfully")
 
