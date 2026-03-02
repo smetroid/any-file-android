@@ -43,21 +43,22 @@ object EmulatorPortForwarding {
      * When true, connections go through the TLS proxy (port 6100).
      * When false, connections go directly to coordinator (via adb reverse to 11004).
      *
-     * IMPORTANT: The TLS translation proxy (port 6100) has a known limitation:
-     * It presents its own peer ID to the coordinator during TLS, but the Android
-     * client sends its own peer ID during the any-sync handshake. This causes the
-     * coordinator to reject the credentials (peer ID mismatch).
+     * The TLS translation proxy (port 6100) performs:
+     * - TLS termination with Android clients (using standard X.509 certificates)
+     * - Handshake translation (re-signs credentials with proxy's Ed25519 key)
+     * - libp2p TLS connection to coordinator (using Ed25519 certificates)
      *
-     * For E2E tests to work, we need to use direct connections (useProxy = false)
-     * where the Android client's peer ID matches the TLS peer ID.
+     * The proxy's peer ID is registered in the coordinator's network configuration,
+     * allowing it to authenticate on behalf of clients.
      *
      * Set this before running tests:
      * ```kotlin
-     * EmulatorPortForwarding.setUseProxy(false)
+     * EmulatorPortForwarding.setUseProxy(true)  // Use proxy
+     * EmulatorPortForwarding.setUseProxy(false) // Direct connection
      * ```
      */
     @Volatile
-    private var useProxy = false  // Use direct connections by default (peer ID must match)
+    private var useProxy = true  // Use proxy by default (peer ID registered in coordinator)
 
     /**
      * Use localhost (127.0.0.1) for connections.

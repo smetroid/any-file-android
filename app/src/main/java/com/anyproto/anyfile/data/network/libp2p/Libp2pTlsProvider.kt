@@ -153,7 +153,10 @@ class Libp2pTlsProvider @Inject constructor(
             sslSocketFactory
         }
 
-        // Variable to hold remote peer ID extracted from certificate
+        // IMPORTANT: Do NOT extract peer ID from TLS certificate
+        // In the any-sync protocol, peer IDs are exchanged via handshake, not TLS
+        // The TLS certificate is for encryption only, not authentication
+        // remotePeerId will remain null and be populated from the handshake
         var remotePeerId: PeerId? = null
 
         // Create and connect the socket with detailed logging
@@ -180,7 +183,7 @@ class Libp2pTlsProvider @Inject constructor(
             socket.startHandshake()
             Log.d(TAG, "TLS handshake completed successfully")
 
-            // Log session details and extract remote peer ID
+            // Log session details (but NOT extracting peer ID)
             try {
                 val session = socket.session
                 Log.d(TAG, "=== TLS Session Details ===")
@@ -196,14 +199,9 @@ class Libp2pTlsProvider @Inject constructor(
                     Log.d(TAG, "Peer certificate subject: ${cert.subjectDN}")
                     Log.d(TAG, "Peer certificate issuer: ${cert.issuerDN}")
                     Log.d(TAG, "Peer certificate valid from: ${cert.notBefore} to ${cert.notAfter}")
-
-                    // Extract remote peer ID from certificate's public key
-                    remotePeerId = extractPeerIdFromCertificate(cert)
-                    Log.d(TAG, "=== Remote Peer ID Extracted ===")
-                    Log.d(TAG, "Remote peer ID: ${remotePeerId?.base58}")
-                    remotePeerId?.publicKeyBytes?.let { pk ->
-                        Log.d(TAG, "Remote public key (hex): ${pk.joinToString("") { "%02x".format(it) }}")
-                    }
+                    // NOTE: We do NOT extract peer ID from certificate
+                    // Peer ID will be exchanged via any-sync handshake
+                    Log.d(TAG, "Peer ID: Will be exchanged via any-sync handshake (not from certificate)")
                 }
                 Log.d(TAG, "=========================")
             } catch (e: Exception) {
@@ -322,6 +320,8 @@ class Libp2pTlsProvider @Inject constructor(
             sslSocketFactory
         }
 
+        // IMPORTANT: Do NOT extract peer ID from TLS certificate
+        // In the any-sync protocol, peer IDs are exchanged via handshake, not TLS
         var remotePeerId: PeerId? = null
 
         val sslSocket: SSLSocket = try {
@@ -339,17 +339,9 @@ class Libp2pTlsProvider @Inject constructor(
             // Force TLS handshake
             created.startHandshake()
 
-            // Extract remote peer ID from certificate
-            try {
-                val session = created.session
-                if (session.peerCertificates.isNotEmpty()) {
-                    val cert = session.peerCertificates[0] as java.security.cert.X509Certificate
-                    remotePeerId = extractPeerIdFromCertificate(cert)
-                    Log.d(TAG, "Extracted remote peer ID from certificate: ${remotePeerId?.base58}")
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not extract remote peer ID: ${e.message}", e)
-            }
+            // NOTE: We do NOT extract peer ID from certificate
+            // Peer ID will be exchanged via any-sync handshake
+            Log.d(TAG, "TLS handshake complete, peer ID will be exchanged via any-sync handshake")
 
             created
         } catch (e: IOException) {

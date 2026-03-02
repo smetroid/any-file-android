@@ -124,6 +124,16 @@ class DrpcClient @Inject constructor(
         }
 
         try {
+            // Wait for the stream to become OPEN (receive ACK for outbound streams)
+            Log.d(TAG, "Waiting for stream to become OPEN...")
+            stream.waitForOpen()
+            Log.d(TAG, "Stream is OPEN, ready to send data")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to wait for stream to open", e)
+            throw DrpcConnectionException("Failed to establish stream", e)
+        }
+
+        try {
             withTimeout(timeoutMs) {
                 // Send the request
                 Log.d(TAG, "Sending DRPC request...")

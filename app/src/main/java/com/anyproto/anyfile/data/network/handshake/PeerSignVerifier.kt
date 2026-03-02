@@ -1,5 +1,6 @@
 package com.anyproto.anyfile.data.network.handshake
 
+import android.util.Log
 import com.anyproto.anyfile.data.network.libp2p.Libp2pKeyPair
 import com.anyproto.anyfile.data.network.libp2p.Libp2pSignature
 import com.anyproto.anyfile.data.network.libp2p.PeerId
@@ -28,7 +29,8 @@ class PeerSignVerifier(
 
     override fun makeCredentials(remotePeerId: PeerId): HandshakeCredentials {
         // Create signature over (localPeerId + remotePeerId)
-        val message = (localPeerId.base58 + remotePeerId.base58).toByteArray()
+        // IMPORTANT: Use UTF-8 encoding explicitly to match Go implementation
+        val message = (localPeerId.base58 + remotePeerId.base58).toByteArray(Charsets.UTF_8)
         val signature = Libp2pSignature.sign(localKeyPair.privateKey, message)
 
         // Create payload with raw Ed25519 public key and signature
@@ -75,8 +77,17 @@ class PeerSignVerifier(
             throw HandshakeProtocolException("Failed to parse PayloadSignedPeerIds", e)
         }
 
+        // IMPORTANT: Derive remote peer ID from the credentials' identity field
+        // The identity field contains the raw 32-byte Ed25519 public key of the remote peer
+        // We derive the peer ID from this public key, NOT from the TLS certificate
+        Log.d("PeerSignVerifier", "Credential identity length: ${payload.identity.size}")
+        val remotePeerIdFromCred = derivePeerIdFromPublicKey(payload.identity)
+        Log.d("PeerSignVerifier", "Derived remote peer ID from credentials: ${remotePeerIdFromCred.base58}")
+
         // Verify signature over (remotePeerId + localPeerId)
-        val message = (remotePeerId.base58 + localPeerId.base58).toByteArray()
+        // IMPORTANT: Use the peer ID derived from credentials, not from TLS
+        // IMPORTANT: Use UTF-8 encoding explicitly to match Go implementation
+        val message = (remotePeerIdFromCred.base58 + localPeerId.base58).toByteArray(Charsets.UTF_8)
         val verified = Libp2pSignature.verify(
             publicKey = payload.identity,
             message = message,
@@ -85,7 +96,7 @@ class PeerSignVerifier(
 
         if (!verified) {
             throw HandshakeProtocolException(
-                "Signature verification failed for peer ${remotePeerId.base58}"
+                "Signature verification failed for peer ${remotePeerIdFromCred.base58}"
             )
         }
 
@@ -95,5 +106,69 @@ class PeerSignVerifier(
             protoVersion = cred.version,
             clientVersion = cred.clientVersion
         )
+    }
+
+    /**
+     * Derive a libp2p peer ID from a raw Ed25519 public key.
+     *
+     * Uses identity multihash format: <code(0x00)><length(36)><protobuf-encoded-key>
+     *
+     * The protobuf encoding for Ed25519 keys is: <0x08><0x01><0x12><0x20><32-byte-key>
+     *
+     * @param publicKey Raw 32-byte Ed25519 public key
+     * @return Derived peer ID
+     */
+    private fun derivePeerIdFromPublicKey(publicKey: ByteArray): PeerId {
+        // Step 1: Create protobuf encoding of Ed25519 key
+        // Format: 08 01 12 20 <32-byte-key>
+        // - 0x08: field 1, wire type 0 (varint) for key type
+        // - 0x01: Ed25519 key type value
+        // - 0x12: field 2, wire type 2 (length-delimited) for key data
+        // - 0x20: varint encoded length (32 bytes)
+        val protobufBytes = ByteArray(4 + publicKey.size)
+        protobufBytes[0] = 0x08.toByte()
+        protobufBytes[1] = 0x01.toByte()
+        protobufBytes[2] = 0x12.toByte()
+        protobufBytes[3] = 0x20.toByte()
+        System.arraycopy(publicKey, 0, protobufBytes, 4, publicKey.size)
+
+        // Step 2: Create identity multihash
+        // Format: <code(0x00)><length(36)><protobuf>
+        val multihash = ByteArray(2 + protobufBytes.size)
+        multihash[0] = 0x00  // Identity multihash code (NOT SHA-256!)
+        multihash[1] = protobufBytes.size.toByte()  // Length of protobuf (36)
+        System.arraycopy(protobufBytes, 0, multihash, 2, protobufBytes.size)
+
+        // Step 3: Encode multihash to base58 (libp2p alphabet)
+        val base58 = encodeBase58Libp2p(multihash)
+
+        return PeerId(base58, multihash, publicKey)
+    }
+
+    /**
+     * Encode byte array to base58 (libp2p alphabet).
+     */
+    private fun encodeBase58Libp2p(input: ByteArray): String {
+        val alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+        var num = java.math.BigInteger(1, input)
+        val base = java.math.BigInteger.valueOf(58)
+        val output = StringBuilder()
+
+        while (num.compareTo(java.math.BigInteger.ZERO) > 0) {
+            val rem = num.mod(base).toInt()
+            output.append(alphabet[rem])
+            num = num.divide(base)
+        }
+
+        // Handle leading zeros
+        for (b in input) {
+            if (b.toInt() == 0) {
+                output.append('1') // '1' is alphabet[0]
+            } else {
+                break
+            }
+        }
+
+        return output.reverse().toString()
     }
 }

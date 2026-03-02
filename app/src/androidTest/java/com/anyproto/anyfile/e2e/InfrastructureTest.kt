@@ -179,6 +179,9 @@ class InfrastructureTest : E2ETestBase() {
 
     @Test
     fun testSimpleTcpCoordinatorConnection() = runTest {
+        // Disable proxy mode for simple TCP+DRPC tests
+        EmulatorPortForwarding.setUseProxy(false)
+
         val host = EmulatorPortForwarding.getCoordinatorHost()
         val port = EmulatorPortForwarding.getCoordinatorPort()
 
@@ -199,6 +202,9 @@ class InfrastructureTest : E2ETestBase() {
 
     @Test
     fun testSimpleTcpRegisterPeer() = runTest {
+        // Disable proxy mode for simple TCP+DRPC tests
+        EmulatorPortForwarding.setUseProxy(false)
+
         val host = EmulatorPortForwarding.getCoordinatorHost()
         val port = EmulatorPortForwarding.getCoordinatorPort()
 
@@ -219,6 +225,9 @@ class InfrastructureTest : E2ETestBase() {
 
     @Test
     fun testSimpleTcpGetCoordinatorNodes() = runTest {
+        // Disable proxy mode for simple TCP+DRPC tests
+        EmulatorPortForwarding.setUseProxy(false)
+
         val host = EmulatorPortForwarding.getCoordinatorHost()
         val port = EmulatorPortForwarding.getCoordinatorPort()
 
@@ -233,6 +242,8 @@ class InfrastructureTest : E2ETestBase() {
             assertTrue(nodes.isNotEmpty(), "Should have at least one coordinator node")
         } finally {
             simpleTcpCoordinatorClient.close()
+            // Re-enable proxy mode for other tests
+            EmulatorPortForwarding.setUseProxy(true)
         }
     }
 

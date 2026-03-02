@@ -44,7 +44,19 @@ class Libp2pKeyManager @Inject constructor() {
         private const val ED25519_SEED_SIZE = 32
 
         /**
+         * Multihash code for identity (0x00).
+         * Used for Ed25519 keys in libp2p.
+         */
+        private const val IDENTITY_MULTIHASH_CODE = 0x00
+
+        /**
+         * Length of protobuf-encoded Ed25519 key (4-byte header + 32-byte key).
+         */
+        private const val ED25519_PROTOBUF_KEY_LENGTH = 36
+
+        /**
          * Multihash code for SHA-256 (0x12).
+         * DEPRECATED: Not used for Ed25519 keys in libp2p.
          */
         private const val SHA256_MULTIHASH_CODE = 0x12
 
@@ -215,31 +227,40 @@ class Libp2pKeyManager @Inject constructor() {
     /**
      * Derive a libp2p peer ID from a public key.
      *
-     * The peer ID is the SHA-256 multihash of the public key bytes.
-     * This follows libp2p's standard peer ID derivation.
+     * For Ed25519 keys, libp2p uses identity multihash format.
      *
-     * Multihash format:
-     * - 1 byte: hash code (0x12 for SHA-256)
-     * - 1 byte: hash length (32 for SHA-256)
-     * - 32 bytes: SHA-256 hash of public key
+     * Identity multihash format:
+     * - 1 byte: hash code (0x00 for identity)
+     * - 1 byte: length (36 for protobuf-encoded Ed25519 key)
+     * - 36 bytes: protobuf-encoded Ed25519 key (<0x08><0x01><0x12><0x20><32-byte-key>)
      *
-     * @param publicKeyBytes The public key bytes to derive a peer ID from
+     * @param publicKeyBytes The Ed25519 public key bytes to derive a peer ID from
      * @return The derived libp2p peer ID
      * @throws Libp2pKeyException if peer ID derivation fails
      */
     fun derivePeerId(publicKeyBytes: ByteArray): PeerId {
         return try {
-            // Calculate SHA-256 hash of public key
-            val messageDigest = java.security.MessageDigest.getInstance("SHA-256")
-            val hash = messageDigest.digest(publicKeyBytes)
+            // Step 1: Create protobuf encoding of Ed25519 key
+            // Format: 08 01 12 20 <32-byte-key>
+            // - 0x08: field 1, wire type 0 (varint) for key type
+            // - 0x01: Ed25519 key type value
+            // - 0x12: field 2, wire type 2 (length-delimited) for key data
+            // - 0x20: varint encoded length (32 bytes)
+            val protobufBytes = ByteArray(4 + publicKeyBytes.size)
+            protobufBytes[0] = 0x08.toByte()
+            protobufBytes[1] = 0x01.toByte()
+            protobufBytes[2] = 0x12.toByte()
+            protobufBytes[3] = 0x20.toByte()
+            System.arraycopy(publicKeyBytes, 0, protobufBytes, 4, publicKeyBytes.size)
 
-            // Create multihash: <code><length><hash>
-            val multihash = ByteArray(2 + hash.size)
-            multihash[0] = SHA256_MULTIHASH_CODE.toByte()
-            multihash[1] = SHA256_HASH_LENGTH.toByte()
-            System.arraycopy(hash, 0, multihash, 2, hash.size)
+            // Step 2: Create identity multihash
+            // Format: <code(0x00)><length(36)><protobuf>
+            val multihash = ByteArray(2 + protobufBytes.size)
+            multihash[0] = IDENTITY_MULTIHASH_CODE.toByte()
+            multihash[1] = ED25519_PROTOBUF_KEY_LENGTH.toByte()
+            System.arraycopy(protobufBytes, 0, multihash, 2, protobufBytes.size)
 
-            // Encode to base58
+            // Step 3: Encode to base58
             val base58 = encodeBase58(multihash)
 
             PeerId(base58, multihash, publicKeyBytes)
@@ -251,6 +272,8 @@ class Libp2pKeyManager @Inject constructor() {
     /**
      * Parse a peer ID from its base58 string representation.
      *
+     * Supports both identity multihash (Ed25519) and SHA-256 multihash formats.
+     *
      * @param base58 The base58-encoded peer ID string
      * @return The parsed PeerId object
      * @throws Libp2pKeyException if parsing fails
@@ -261,19 +284,35 @@ class Libp2pKeyManager @Inject constructor() {
 
             // Validate multihash format
             require(multihash.size >= 2) { "Invalid multihash: too short" }
-            require(multihash[0].toInt() and 0xFF == SHA256_MULTIHASH_CODE) {
-                "Invalid multihash: wrong hash code ${multihash[0].toInt() and 0xFF}"
-            }
-            require(multihash[1].toInt() and 0xFF == SHA256_HASH_LENGTH) {
-                "Invalid multihash: wrong hash length ${multihash[1].toInt() and 0xFF}"
-            }
 
-            // Extract hash from multihash
-            val hash = ByteArray(SHA256_HASH_LENGTH)
-            System.arraycopy(multihash, 2, hash, 0, SHA256_HASH_LENGTH)
+            val hashCode = multihash[0].toInt() and 0xFF
+            val length = multihash[1].toInt() and 0xFF
 
-            // Note: We don't have the original public key, so public key bytes are null
-            PeerId(base58, multihash, null)
+            when (hashCode) {
+                IDENTITY_MULTIHASH_CODE -> {
+                    // Identity multihash (Ed25519)
+                    // Format: <0x00><length(36)><protobuf-encoded-key>
+                    require(length == ED25519_PROTOBUF_KEY_LENGTH) {
+                        "Invalid identity multihash: wrong length $length, expected $ED25519_PROTOBUF_KEY_LENGTH"
+                    }
+                    require(multihash.size >= 2 + ED25519_PROTOBUF_KEY_LENGTH) {
+                        "Invalid identity multihash: too short"
+                    }
+                    // Note: We don't have the original public key, so public key bytes are null
+                    PeerId(base58, multihash, null)
+                }
+                SHA256_MULTIHASH_CODE -> {
+                    // SHA-256 multihash (legacy/other key types)
+                    require(length == SHA256_HASH_LENGTH) {
+                        "Invalid SHA-256 multihash: wrong hash length $length"
+                    }
+                    // Note: We don't have the original public key, so public key bytes are null
+                    PeerId(base58, multihash, null)
+                }
+                else -> {
+                    throw Libp2pKeyException("Unsupported multihash code: $hashCode")
+                }
+            }
         } catch (e: Exception) {
             throw Libp2pKeyException("Failed to parse peer ID: $base58", e)
         }

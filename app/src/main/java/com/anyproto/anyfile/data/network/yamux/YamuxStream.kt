@@ -1,6 +1,7 @@
 package com.anyproto.anyfile.data.network.yamux
 
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.CompletableDeferred
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -79,6 +80,9 @@ class YamuxStream(
     // Data channels for async I/O
     private val dataChannel = Channel<ByteArray>(DATA_CHANNEL_CAPACITY)
 
+    // Signal when stream becomes OPEN (for outbound streams waiting for ACK)
+    private val openDeferred = CompletableDeferred<Unit>()
+
     // Remote close flag
     private var remoteFinReceived = false
     private var localFinSent = false
@@ -116,6 +120,9 @@ class YamuxStream(
             _state = State.OPEN
         }
 
+        // Signal that the stream is now open (for inbound streams, it's open immediately)
+        openDeferred.complete(Unit)
+
         // Send ACK frame
         val ackFrame = YamuxFrame.Data(
             streamId = streamId,
@@ -123,6 +130,24 @@ class YamuxStream(
             data = ByteArray(0)
         )
         session.sendFrame(ackFrame)
+    }
+
+    /**
+     * Wait for the stream to transition to OPEN state.
+     * For outbound streams, this waits for the ACK to be received.
+     * For inbound streams, this returns immediately as they're already OPEN.
+     *
+     * @throws YamuxStreamException if the stream is closed before becoming OPEN
+     */
+    suspend fun waitForOpen() {
+        try {
+            openDeferred.await()
+        } catch (e: Exception) {
+            if (closed) {
+                throw YamuxStreamException("Stream closed before becoming OPEN")
+            }
+            throw YamuxStreamException("Failed to wait for stream to open", e)
+        }
     }
 
     /**
@@ -148,6 +173,8 @@ class YamuxStream(
                     // Update state if this is an ACK to our SYN
                     if (_state == State.SYN_SENT && frame.flags.contains(YamuxFrame.Flag.ACK)) {
                         _state = State.OPEN
+                        // Signal that the stream is now open
+                        openDeferred.complete(Unit)
                     }
 
                     // Check for FIN flag
