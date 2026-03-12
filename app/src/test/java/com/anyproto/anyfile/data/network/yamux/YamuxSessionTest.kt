@@ -1,6 +1,8 @@
 package com.anyproto.anyfile.data.network.yamux
 
 import io.mockk.*
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -21,12 +23,14 @@ import kotlin.test.assertTrue
  * Tests session lifecycle, stream opening/accepting,
  * frame routing, and session-level operations.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class YamuxSessionTest {
 
     private lateinit var mockSocket: SSLSocket
     private lateinit var mockInputStream: InputStream
     private lateinit var mockOutputStream: OutputStream
     private lateinit var session: YamuxSession
+    private val testDispatcher = UnconfinedTestDispatcher()
 
     @Before
     fun setup() {
@@ -37,7 +41,7 @@ class YamuxSessionTest {
         every { mockSocket.getInputStream() } returns mockInputStream
         every { mockSocket.getOutputStream() } returns mockOutputStream
 
-        session = YamuxSession(mockSocket, isClient = true)
+        session = YamuxSession(mockSocket, isClient = true, coroutineContext = testDispatcher)
     }
 
     @After
@@ -102,7 +106,7 @@ class YamuxSessionTest {
     @Test
     fun `openStream as server should create streams with even IDs`() = runTest {
         // Arrange
-        val serverSession = YamuxSession(mockSocket, isClient = false)
+        val serverSession = YamuxSession(mockSocket, isClient = false, coroutineContext = testDispatcher)
         every { mockOutputStream.write(any<ByteArray>()) } just Runs
         every { mockOutputStream.flush() } just Runs
 
@@ -420,7 +424,7 @@ class YamuxSessionTest {
     @Test
     fun `server session should use even stream IDs`() = runTest {
         // Arrange
-        val serverSession = YamuxSession(mockSocket, isClient = false)
+        val serverSession = YamuxSession(mockSocket, isClient = false, coroutineContext = testDispatcher)
         every { mockOutputStream.write(any<ByteArray>()) } just Runs
         every { mockOutputStream.flush() } just Runs
 

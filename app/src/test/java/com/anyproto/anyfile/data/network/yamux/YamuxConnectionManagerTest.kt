@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import java.io.InputStream
 import javax.net.ssl.SSLSocket
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -38,8 +39,21 @@ class YamuxConnectionManagerTest {
         mockTlsProvider = mockk()
         mockSocket = mockk(relaxed = true)
 
+        // Setup a blocking InputStream so the YamuxSession frame reader never
+        // processes frames or triggers session close during test assertions.
+        // This eliminates the race between background IO threads and test assertions.
+        val blockingInputStream = mockk<InputStream>()
+        every { blockingInputStream.read(any<ByteArray>(), any<Int>(), any<Int>()) } answers {
+            try {
+                Thread.sleep(Long.MAX_VALUE)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            -1
+        }
+
         // Setup socket mock - override specific methods we care about
-        every { mockSocket.getInputStream() } returns mockk()
+        every { mockSocket.getInputStream() } returns blockingInputStream
         every { mockSocket.getOutputStream() } returns mockk()
 
         // Setup TLS provider mock to return Libp2pTlsSocket wrapper
@@ -117,7 +131,6 @@ class YamuxConnectionManagerTest {
         val mockOutputStream = mockk<java.io.OutputStream>()
         every { mockOutputStream.write(any<ByteArray>()) } just Runs
         every { mockOutputStream.flush() } just Runs
-        every { mockSocket.getInputStream() } returns mockk()
         every { mockSocket.getOutputStream() } returns mockOutputStream
 
         // Act - get session twice
@@ -435,7 +448,6 @@ class YamuxConnectionManagerTest {
         val mockOutputStream = mockk<java.io.OutputStream>()
         every { mockOutputStream.write(any<ByteArray>()) } just Runs
         every { mockOutputStream.flush() } just Runs
-        every { mockSocket.getInputStream() } returns mockk()
         every { mockSocket.getOutputStream() } returns mockOutputStream
 
         // Act - request same session concurrently
