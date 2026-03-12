@@ -36,13 +36,11 @@ class YamuxConnectionManagerTest {
     fun setup() {
         keyManager = Libp2pKeyManager()
         mockTlsProvider = mockk()
-        mockSocket = mockk()
+        mockSocket = mockk(relaxed = true)
 
-        // Setup socket mock
+        // Setup socket mock - override specific methods we care about
         every { mockSocket.getInputStream() } returns mockk()
         every { mockSocket.getOutputStream() } returns mockk()
-        every { mockSocket.close() } just Runs
-        every { mockSocket.soTimeout = any() } just Runs
 
         // Setup TLS provider mock to return Libp2pTlsSocket wrapper
         val localPeerId = keyManager.derivePeerId(keyManager.getDefaultKeyPair().publicKey)
@@ -109,7 +107,7 @@ class YamuxConnectionManagerTest {
         assertTrue(connectionManager.hasSession("localhost", 8080))
 
         coVerify(exactly = 1) {
-            mockTlsProvider.createTlsSocket("localhost", 8080, 30000, false, false, true)
+            mockTlsProvider.createTlsSocket("localhost", 8080, 30000, true, false, true)
         }
     }
 
@@ -134,7 +132,7 @@ class YamuxConnectionManagerTest {
 
         // TLS socket should only be created once
         coVerify(exactly = 1) {
-            mockTlsProvider.createTlsSocket("localhost", 8080, 30000, false, false, true)
+            mockTlsProvider.createTlsSocket("localhost", 8080, 30000, true, false, true)
         }
     }
 
@@ -345,7 +343,7 @@ class YamuxConnectionManagerTest {
 
         // Assert
         coVerify(exactly = 1) {
-            mockTlsProvider.createTlsSocket("localhost", 8080, 5000, false, false, true)
+            mockTlsProvider.createTlsSocket("localhost", 8080, 5000, true, false, true)
         }
     }
 

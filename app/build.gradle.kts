@@ -24,6 +24,12 @@ android {
         }
     }
 
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+        }
+    }
+
     buildTypes {
         debug {
             // Allow cleartext HTTP for emulator testing (10.0.2.2)

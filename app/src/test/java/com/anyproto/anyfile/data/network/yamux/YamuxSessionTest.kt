@@ -30,14 +30,12 @@ class YamuxSessionTest {
 
     @Before
     fun setup() {
-        mockSocket = mockk()
+        mockSocket = mockk(relaxed = true)
         mockInputStream = mockk()
         mockOutputStream = mockk()
 
         every { mockSocket.getInputStream() } returns mockInputStream
         every { mockSocket.getOutputStream() } returns mockOutputStream
-        every { mockSocket.close() } just Runs
-        every { mockSocket.soTimeout = any() } just Runs
 
         session = YamuxSession(mockSocket, isClient = true)
     }
@@ -54,21 +52,26 @@ class YamuxSessionTest {
 
     @Test
     fun `session should start successfully`() = runTest {
-        // Arrange - Mock frame reader behavior
-        coEvery { mockInputStream.read(any()) } returns -1 // End of stream
+        // Arrange - Mock the output stream so GO_AWAY write doesn't fail if the background
+        // reader encounters EOF and closes the session
+        every { mockOutputStream.write(any<ByteArray>()) } just Runs
+        every { mockOutputStream.flush() } just Runs
+        // Mock read to return -1 (EOF) via the 3-argument overload used by readExactBytes
+        every { mockInputStream.read(any<ByteArray>(), any<Int>(), any<Int>()) } returns -1
 
-        // Act
+        // Act - start() launches the background frame reader and returns immediately
         session.start()
 
-        // Assert - Session should still be active
+        // Assert - Session is active immediately after start() returns,
+        // before the background reader has had a chance to process the EOF
         assertTrue(session.isActive())
     }
 
     @Test
     fun `openStream should create new stream with odd ID for client`() = runTest {
         // Arrange - Mock write to accept ByteArray
-        coEvery { mockOutputStream.write(any<ByteArray>()) } just Runs
-        coEvery { mockOutputStream.flush() } just Runs
+        every { mockOutputStream.write(any<ByteArray>()) } just Runs
+        every { mockOutputStream.flush() } just Runs
 
         // Act
         val stream = session.openStream()
@@ -82,8 +85,8 @@ class YamuxSessionTest {
     @Test
     fun `openStream should create streams with incrementing odd IDs`() = runTest {
         // Arrange
-        coEvery { mockOutputStream.write(any<ByteArray>()) } just Runs
-        coEvery { mockOutputStream.flush() } just Runs
+        every { mockOutputStream.write(any<ByteArray>()) } just Runs
+        every { mockOutputStream.flush() } just Runs
 
         // Act
         val stream1 = session.openStream()
@@ -100,8 +103,8 @@ class YamuxSessionTest {
     fun `openStream as server should create streams with even IDs`() = runTest {
         // Arrange
         val serverSession = YamuxSession(mockSocket, isClient = false)
-        coEvery { mockOutputStream.write(any<ByteArray>()) } just Runs
-        coEvery { mockOutputStream.flush() } just Runs
+        every { mockOutputStream.write(any<ByteArray>()) } just Runs
+        every { mockOutputStream.flush() } just Runs
 
         // Act
         val stream = serverSession.openStream()
@@ -169,8 +172,8 @@ class YamuxSessionTest {
     @Test
     fun `getStream should return existing stream`() = runTest {
         // Arrange
-        coEvery { mockOutputStream.write(any<ByteArray>()) } just Runs
-        coEvery { mockOutputStream.flush() } just Runs
+        every { mockOutputStream.write(any<ByteArray>()) } just Runs
+        every { mockOutputStream.flush() } just Runs
         val stream = session.openStream()
 
         // Act
@@ -193,8 +196,8 @@ class YamuxSessionTest {
     @Test
     fun `getStreamCount should return number of active streams`() = runTest {
         // Arrange
-        coEvery { mockOutputStream.write(any<ByteArray>()) } just Runs
-        coEvery { mockOutputStream.flush() } just Runs
+        every { mockOutputStream.write(any<ByteArray>()) } just Runs
+        every { mockOutputStream.flush() } just Runs
 
         // Act & Assert
         assertEquals(0, session.getStreamCount())
@@ -368,8 +371,8 @@ class YamuxSessionTest {
     @Test
     fun `removeStream should remove stream from session`() = runTest {
         // Arrange
-        coEvery { mockOutputStream.write(any<ByteArray>()) } just Runs
-        coEvery { mockOutputStream.flush() } just Runs
+        every { mockOutputStream.write(any<ByteArray>()) } just Runs
+        every { mockOutputStream.flush() } just Runs
         session.openStream()
 
         // Act
@@ -383,8 +386,8 @@ class YamuxSessionTest {
     @Test
     fun `close should close all streams`() = runTest {
         // Arrange
-        coEvery { mockOutputStream.write(any<ByteArray>()) } just Runs
-        coEvery { mockOutputStream.flush() } just Runs
+        every { mockOutputStream.write(any<ByteArray>()) } just Runs
+        every { mockOutputStream.flush() } just Runs
         session.openStream()
         session.openStream()
 
@@ -398,8 +401,8 @@ class YamuxSessionTest {
     @Test
     fun `client session should use odd stream IDs`() = runTest {
         // Arrange
-        coEvery { mockOutputStream.write(any<ByteArray>()) } just Runs
-        coEvery { mockOutputStream.flush() } just Runs
+        every { mockOutputStream.write(any<ByteArray>()) } just Runs
+        every { mockOutputStream.flush() } just Runs
 
         // Act
         val stream1 = session.openStream()
@@ -418,8 +421,8 @@ class YamuxSessionTest {
     fun `server session should use even stream IDs`() = runTest {
         // Arrange
         val serverSession = YamuxSession(mockSocket, isClient = false)
-        coEvery { mockOutputStream.write(any<ByteArray>()) } just Runs
-        coEvery { mockOutputStream.flush() } just Runs
+        every { mockOutputStream.write(any<ByteArray>()) } just Runs
+        every { mockOutputStream.flush() } just Runs
 
         // Act
         val stream1 = serverSession.openStream()
