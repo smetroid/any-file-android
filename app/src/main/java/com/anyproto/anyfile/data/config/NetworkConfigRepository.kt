@@ -123,20 +123,32 @@ class NetworkConfigRepository @Inject constructor(
         val yaml = configFile.readText()
         val node = parseNodes(yaml).firstOrNull { it.types.contains("coordinator") }
             ?: error("No coordinator node in config")
-        return parseHostPort(node.addresses.first())
+        return parseHostPort(selectAddress(node.addresses))
     }
 
     /**
      * Returns the first fileNode's host and port.
+     * Accepts both "fileNode" (plan format) and "file" (real any-sync network.yml format).
      *
      * @throws IllegalStateException if no config is saved or no fileNode is found
      */
     fun getFilenodeAddress(): Pair<String, Int> {
         check(configFile.exists()) { "No network config saved" }
         val yaml = configFile.readText()
-        val node = parseNodes(yaml).firstOrNull { it.types.contains("fileNode") }
+        val node = parseNodes(yaml)
+            .firstOrNull { it.types.contains("fileNode") || it.types.contains("file") }
             ?: error("No fileNode in config")
-        return parseHostPort(node.addresses.first())
+        return parseHostPort(selectAddress(node.addresses))
+    }
+
+    /**
+     * From a list of addresses, prefer a plain TCP IPv4 address (starts with a digit)
+     * over Docker hostnames or quic:// URIs. Falls back to the first non-quic address,
+     * then the raw first address if nothing better is found.
+     */
+    private fun selectAddress(addresses: List<String>): String {
+        val tcpOnly = addresses.filterNot { it.startsWith("quic://") }
+        return tcpOnly.firstOrNull { it.first().isDigit() } ?: tcpOnly.firstOrNull() ?: addresses.first()
     }
 
     // -------------------------------------------------------------------------
