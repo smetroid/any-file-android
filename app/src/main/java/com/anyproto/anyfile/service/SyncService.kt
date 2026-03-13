@@ -60,6 +60,7 @@ class SyncService : Service() {
 
     @Inject lateinit var syncClient: SyncClient
     @Inject lateinit var networkConfigRepository: NetworkConfigRepository
+    @Inject lateinit var uploadCoordinator: FileUploadCoordinator
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var fileWatcher: FileWatcher? = null
@@ -129,16 +130,16 @@ class SyncService : Service() {
             fileWatcher = FileWatcher(syncFolderPath)
             fileWatcher?.setListener(object : FileChangeListener {
                 override fun onFileCreated(path: String) {
-                    serviceScope.launch { /* upload stub */ }
+                    serviceScope.launch { uploadCoordinator.upload(path) }
                 }
                 override fun onFileModified(path: String) {
-                    serviceScope.launch { /* upload stub */ }
+                    serviceScope.launch { uploadCoordinator.upload(path) }
                 }
                 override fun onFileDeleted(path: String) {
                     // not synced in v1
                 }
                 override fun onFileMoved(oldPath: String, newPath: String) {
-                    serviceScope.launch { /* upload newPath stub */ }
+                    serviceScope.launch { uploadCoordinator.upload(newPath) }
                 }
             })
             fileWatcher?.start()
