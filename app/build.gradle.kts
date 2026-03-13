@@ -27,6 +27,7 @@ android {
     testOptions {
         unitTests {
             isReturnDefaultValues = true
+            isIncludeAndroidResources = true
         }
     }
 
@@ -173,6 +174,8 @@ dependencies {
     kapt("com.google.dagger:hilt-android-compiler:2.48")
 
     // Testing
+    testImplementation("org.robolectric:robolectric:4.11.1")
+    testImplementation("androidx.test:core:1.5.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlin:kotlin-test:1.9.20")
     testImplementation("io.mockk:mockk:1.13.5")
