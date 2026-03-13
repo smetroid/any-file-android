@@ -3,7 +3,6 @@ package com.anyproto.anyfile.ui.screens.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.anyproto.anyfile.data.config.NetworkConfigRepository
-import com.anyproto.anyfile.data.network.SyncClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -24,7 +23,6 @@ sealed class OnboardingEvent {
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
     private val networkConfigRepository: NetworkConfigRepository,
-    private val syncClient: SyncClient,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<OnboardingState>(OnboardingState.Initial)

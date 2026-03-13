@@ -2,6 +2,8 @@ package com.anyproto.anyfile.data.config
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.URL
 import javax.inject.Inject
@@ -54,10 +56,10 @@ class NetworkConfigRepository @Inject constructor(
      * @throws IllegalArgumentException if the source is empty
      * @throws java.io.IOException on network/IO failure
      */
-    suspend fun fetch(source: String): ByteArray {
+    suspend fun fetch(source: String): ByteArray = withContext(Dispatchers.IO) {
         require(source.isNotBlank()) { "Source must not be blank" }
 
-        return if (source.startsWith("https://") || source.startsWith("http://")) {
+        if (source.startsWith("https://") || source.startsWith("http://")) {
             fetchFromUrl(source)
         } else {
             fetchFromFile(source)

@@ -13,8 +13,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class NavViewModel @Inject constructor(
-    private val networkConfigRepository: NetworkConfigRepository,
+    networkConfigRepository: NetworkConfigRepository,
 ) : ViewModel() {
-    /** True when a valid network config has been saved to disk. */
-    val isConfigured: Boolean get() = networkConfigRepository.isConfigured()
+    /** True when a valid network config has been saved to disk. Evaluated once at init time. */
+    val isConfigured: Boolean = networkConfigRepository.isConfigured()
 }

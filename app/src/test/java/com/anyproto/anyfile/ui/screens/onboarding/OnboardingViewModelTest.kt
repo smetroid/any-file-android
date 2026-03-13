@@ -1,7 +1,6 @@
 package com.anyproto.anyfile.ui.screens.onboarding
 
 import com.anyproto.anyfile.data.config.NetworkConfigRepository
-import com.anyproto.anyfile.data.network.SyncClient
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -20,15 +19,13 @@ class OnboardingViewModelTest {
 
     private val testDispatcher = UnconfinedTestDispatcher()
     private lateinit var networkConfigRepo: NetworkConfigRepository
-    private lateinit var syncClient: SyncClient
     private lateinit var viewModel: OnboardingViewModel
 
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
         networkConfigRepo = mockk(relaxed = true)
-        syncClient = mockk(relaxed = true)
-        viewModel = OnboardingViewModel(networkConfigRepo, syncClient)
+        viewModel = OnboardingViewModel(networkConfigRepo)
     }
 
     @After
