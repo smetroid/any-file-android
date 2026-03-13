@@ -78,8 +78,11 @@ class SyncService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         fileWatcher?.stop()
-        serviceScope.launch { syncClient.disconnect() }
-        serviceScope.cancel()
+        serviceScope.cancel()  // stop poll loop
+        // Disconnect in a one-shot scope that cannot be cancelled
+        CoroutineScope(Dispatchers.IO).launch {
+            syncClient.disconnect()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
