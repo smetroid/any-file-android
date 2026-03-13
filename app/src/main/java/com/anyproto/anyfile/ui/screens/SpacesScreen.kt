@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -34,6 +35,8 @@ fun SpacesScreen(
 ) {
     val spaces by viewModel.spaces.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val serviceSyncStatus by viewModel.serviceSyncStatus.collectAsState()
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     // Snackbar host state for error messages
@@ -71,32 +74,40 @@ fun SpacesScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (spaces.isEmpty()) {
-                EmptySpacesState(
-                    onRefresh = { viewModel.refreshAllSpaces() },
-                    isRefreshing = isRefreshing
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(
-                        items = spaces,
-                        key = { it.spaceId }
-                    ) { space ->
-                        SpaceListItem(
-                            space = space,
-                            onClick = { onSpaceClick(space.spaceId) },
-                            onSyncClick = { viewModel.syncSpace(space.spaceId) },
-                            isSyncing = space.syncStatus == SyncStatus.SYNCING
-                        )
+            SyncStatusBanner(
+                status = serviceSyncStatus,
+                syncFolderPath = viewModel.syncFolderPath,
+                onStart = { viewModel.startSync(context) },
+                onStop = { viewModel.stopSync(context) }
+            )
+            Box(modifier = Modifier.weight(1f)) {
+                if (spaces.isEmpty()) {
+                    EmptySpacesState(
+                        onRefresh = { viewModel.refreshAllSpaces() },
+                        isRefreshing = isRefreshing
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(
+                            items = spaces,
+                            key = { it.spaceId }
+                        ) { space ->
+                            SpaceListItem(
+                                space = space,
+                                onClick = { onSpaceClick(space.spaceId) },
+                                onSyncClick = { viewModel.syncSpace(space.spaceId) },
+                                isSyncing = space.syncStatus == SyncStatus.SYNCING
+                            )
+                        }
                     }
                 }
             }
@@ -263,5 +274,51 @@ private fun formatDate(date: Date?): String {
         DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(date)
     } else {
         "Never"
+    }
+}
+
+/**
+ * Banner showing the sync service status with Start/Stop controls.
+ */
+@Composable
+fun SyncStatusBanner(
+    status: ServiceSyncStatus,
+    syncFolderPath: String?,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val (statusText, color) = when (status) {
+        ServiceSyncStatus.IDLE -> "Paused" to MaterialTheme.colorScheme.onSurfaceVariant
+        ServiceSyncStatus.ACTIVE -> "Active" to MaterialTheme.colorScheme.primary
+        ServiceSyncStatus.ERROR -> "Error" to MaterialTheme.colorScheme.error
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Sync: $statusText", style = MaterialTheme.typography.labelMedium, color = color)
+                if (syncFolderPath != null) {
+                    Text(
+                        syncFolderPath.takeLast(40),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (status == ServiceSyncStatus.ACTIVE) {
+                OutlinedButton(onClick = onStop) { Text("Stop") }
+            } else {
+                Button(onClick = onStart) { Text("Start") }
+            }
+        }
     }
 }

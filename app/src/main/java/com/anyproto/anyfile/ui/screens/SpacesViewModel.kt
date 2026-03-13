@@ -1,12 +1,15 @@
 // app/src/main/java/com/anyproto/anyfile/ui/screens/SpacesViewModel.kt
 package com.anyproto.anyfile.ui.screens
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.anyproto.anyfile.data.config.NetworkConfigRepository
 import com.anyproto.anyfile.data.database.dao.SpaceDao
 import com.anyproto.anyfile.data.database.model.SyncStatus
 import com.anyproto.anyfile.domain.sync.SyncOrchestrator
 import com.anyproto.anyfile.domain.sync.SyncResult
+import com.anyproto.anyfile.service.SyncService
 import com.anyproto.anyfile.util.AnyfileException
 import com.anyproto.anyfile.util.ErrorHandler
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -14,13 +17,16 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+enum class ServiceSyncStatus { IDLE, ACTIVE, ERROR }
+
 /**
  * ViewModel for SpacesScreen
  */
 @HiltViewModel
 class SpacesViewModel @Inject constructor(
     private val spaceDao: SpaceDao,
-    private val syncOrchestrator: SyncOrchestrator
+    private val syncOrchestrator: SyncOrchestrator,
+    private val networkConfigRepository: NetworkConfigRepository
 ) : ViewModel() {
 
     /**
@@ -45,6 +51,33 @@ class SpacesViewModel @Inject constructor(
      */
     private val _errorEvent = MutableSharedFlow<Throwable>()
     val errorEvent: SharedFlow<Throwable> = _errorEvent.asSharedFlow()
+
+    /**
+     * Service sync status (IDLE / ACTIVE / ERROR)
+     */
+    private val _serviceSyncStatus = MutableStateFlow(ServiceSyncStatus.IDLE)
+    val serviceSyncStatus: StateFlow<ServiceSyncStatus> = _serviceSyncStatus.asStateFlow()
+
+    /**
+     * The sync folder path configured by the user, or null if not set.
+     */
+    val syncFolderPath: String? get() = networkConfigRepository.syncFolderPath
+
+    /**
+     * Start the foreground SyncService and update status to ACTIVE.
+     */
+    fun startSync(context: Context) {
+        _serviceSyncStatus.value = ServiceSyncStatus.ACTIVE
+        SyncService.start(context)
+    }
+
+    /**
+     * Stop the foreground SyncService and update status to IDLE.
+     */
+    fun stopSync(context: Context) {
+        _serviceSyncStatus.value = ServiceSyncStatus.IDLE
+        SyncService.stop(context)
+    }
 
     /**
      * Clear any pending error event

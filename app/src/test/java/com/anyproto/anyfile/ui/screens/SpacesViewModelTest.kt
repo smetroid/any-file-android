@@ -1,6 +1,8 @@
 // app/src/test/java/com/anyproto/anyfile/ui/screens/SpacesViewModelTest.kt
 package com.anyproto.anyfile.ui.screens
 
+import android.content.Context
+import com.anyproto.anyfile.data.config.NetworkConfigRepository
 import com.anyproto.anyfile.data.database.dao.SpaceDao
 import com.anyproto.anyfile.data.database.entity.Space
 import com.anyproto.anyfile.data.database.model.SyncStatus
@@ -12,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -20,6 +23,7 @@ import org.junit.Before
 import org.junit.Test
 import com.google.common.truth.Truth.assertThat
 import java.util.Date
+import org.junit.Assert.assertEquals
 
 /**
  * Unit tests for SpacesViewModel.
@@ -36,6 +40,7 @@ class SpacesViewModelTest {
 
     private lateinit var mockSpaceDao: SpaceDao
     private lateinit var mockSyncOrchestrator: SyncOrchestrator
+    private lateinit var mockNetworkConfigRepository: NetworkConfigRepository
     private val testDispatcher = UnconfinedTestDispatcher()
 
     private val testSpaceId = "test-space-123"
@@ -54,12 +59,14 @@ class SpacesViewModelTest {
 
         mockSpaceDao = mockk(relaxed = true)
         mockSyncOrchestrator = mockk(relaxed = true)
+        mockNetworkConfigRepository = mockk(relaxed = true)
 
         // Setup default mock behaviors
         coEvery { mockSpaceDao.getAllSpaces() } returns flowOf(emptyList())
         coEvery { mockSpaceDao.getSpaceById(any()) } returns null
         coEvery { mockSpaceDao.updateSpace(any()) } returns 1
         coEvery { mockSyncOrchestrator.sync(any()) } returns SyncResult.Success
+        every { mockNetworkConfigRepository.syncFolderPath } returns null
     }
 
     @After
@@ -70,7 +77,8 @@ class SpacesViewModelTest {
     private fun createViewModel(): SpacesViewModel {
         return SpacesViewModel(
             spaceDao = mockSpaceDao,
-            syncOrchestrator = mockSyncOrchestrator
+            syncOrchestrator = mockSyncOrchestrator,
+            networkConfigRepository = mockNetworkConfigRepository
         )
     }
 
@@ -367,5 +375,24 @@ class SpacesViewModelTest {
 
         // Assert - Verify sync was called
         coVerify { mockSyncOrchestrator.sync(testSpaceId) }
+    }
+
+    @Test
+    fun `startSync transitions serviceSyncStatus to ACTIVE`() = runTest {
+        val context = mockk<Context>(relaxed = true)
+        val viewModel = createViewModel()
+        viewModel.startSync(context)
+        advanceUntilIdle()
+        assertEquals(ServiceSyncStatus.ACTIVE, viewModel.serviceSyncStatus.value)
+    }
+
+    @Test
+    fun `stopSync transitions serviceSyncStatus to IDLE`() = runTest {
+        val context = mockk<Context>(relaxed = true)
+        val viewModel = createViewModel()
+        viewModel.startSync(context)
+        viewModel.stopSync(context)
+        advanceUntilIdle()
+        assertEquals(ServiceSyncStatus.IDLE, viewModel.serviceSyncStatus.value)
     }
 }
