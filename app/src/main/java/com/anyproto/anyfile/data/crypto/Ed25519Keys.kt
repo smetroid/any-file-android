@@ -24,48 +24,23 @@ class Ed25519PrivateKey(
     override fun getFormat(): String = "PKCS#8"
 
     override fun getEncoded(): ByteArray {
-        // Convert raw seed to PKCS#8 format
-        // PKCS#8 structure for Ed25519:
-        // 0x30 0x2F 0x02 0x01 0x00 0x30 0x05 0x06 0x03 0x2B 0x65 0x70
-        // 0x04 0x20 [32-byte seed] 0xA1 0x01 0x01
-        // Total: 49 bytes
-
-        val result = ByteArray(49)
-        var offset = 0
-
-        // SEQUENCE
-        result[offset++] = 0x30.toByte()
-        result[offset++] = 0x2F.toByte()  // Fixed: was 0x2E (46), should be 0x2F (47)
-
-        // INTEGER 0 (version)
-        result[offset++] = 0x02.toByte()
-        result[offset++] = 0x01.toByte()
-        result[offset++] = 0x00.toByte()
-
-        // SEQUENCE (AlgorithmIdentifier)
-        result[offset++] = 0x30.toByte()
-        result[offset++] = 0x05.toByte()
-        result[offset++] = 0x06.toByte()
-        result[offset++] = 0x03.toByte()
-        result[offset++] = 0x2B.toByte()
-        result[offset++] = 0x65.toByte()
-        result[offset++] = 0x70.toByte()
-
-        // OCTET STRING (private key) - Fixed: removed extra 0x04 byte that was causing issues
-        result[offset++] = 0x04.toByte()
-        result[offset++] = 0x20.toByte()
-
-        // The seed (32 bytes)
-        System.arraycopy(rawSeed, 0, result, offset, rawSeed.size)
-        offset += rawSeed.size
-
-        // [1] (context tag for attributes)
-        result[offset++] = 0xA1.toByte()
-        result[offset++] = 0x01.toByte()
-
-        // BOOLEAN TRUE
-        result[offset++] = 0x01.toByte()
-
+        // Standard RFC 8410 PKCS#8 for Ed25519 (48 bytes):
+        // SEQUENCE {
+        //   INTEGER 0 (version)
+        //   SEQUENCE { OID 1.3.101.112 }  (AlgorithmIdentifier)
+        //   OCTET STRING { OCTET STRING { 32-byte seed } }  (CurvePrivateKey, double-wrapped)
+        // }
+        val result = ByteArray(48)
+        val header = byteArrayOf(
+            0x30, 0x2E.toByte(),                         // SEQUENCE, length 46
+            0x02, 0x01, 0x00,                            // INTEGER 0 (version)
+            0x30, 0x05,                                  // SEQUENCE 5 (AlgorithmIdentifier)
+            0x06, 0x03, 0x2B.toByte(), 0x65, 0x70,      // OID 1.3.101.112 (Ed25519)
+            0x04, 0x22.toByte(),                         // OCTET STRING 34 (outer privateKey)
+            0x04, 0x20,                                  // OCTET STRING 32 (CurvePrivateKey)
+        )
+        System.arraycopy(header, 0, result, 0, header.size)      // bytes 0-15 (16 bytes)
+        System.arraycopy(rawSeed, 0, result, header.size, 32)    // bytes 16-47 (32 bytes seed)
         return result
     }
 

@@ -23,7 +23,7 @@ class PeerSignVerifier(
     private val localKeyPair: Libp2pKeyPair,
     private val localPeerId: PeerId,
     private val protoVersion: UInt = 8u,
-    private val compatibleVersions: List<UInt> = listOf(8u, 9u),
+    private val compatibleVersions: List<UInt> = listOf(7u, 8u, 9u),
     private val clientVersion: String = NoVerifyChecker.DEFAULT_CLIENT_VERSION
 ) : CredentialChecker {
 
@@ -33,11 +33,13 @@ class PeerSignVerifier(
         val message = (localPeerId.base58 + remotePeerId.base58).toByteArray(Charsets.UTF_8)
         val signature = Libp2pSignature.sign(localKeyPair.privateKey, message)
 
-        // Create payload with raw Ed25519 public key and signature
-        // IMPORTANT: identity is raw 32-byte Ed25519 public key (NOT protobuf-encoded)
-        // This matches the any-sync wire format for SignedPeerIds credentials
+        // Create payload with any-sync crypto.Key proto-encoded public key and signature.
+        // Go coordinator calls crypto.UnmarshalEd25519PublicKeyProto(payload.Identity),
+        // which expects Key{Type: ED25519_PUBLIC=0, Data: rawKey} wire format:
+        //   0x12 (field 2, length-delimited) 0x20 (32 bytes) [32 bytes] = 34 bytes.
+        // ED25519_PUBLIC=0 is the proto3 default, so the Type field is omitted.
         val payload = PayloadSignedPeerIds(
-            identity = localKeyPair.publicKey,  // Raw 32-byte Ed25519 public key
+            identity = localKeyPair.encodePublicKeyProto(),  // any-sync crypto.Key proto (34 bytes)
             sign = signature
         )
 
@@ -77,98 +79,64 @@ class PeerSignVerifier(
             throw HandshakeProtocolException("Failed to parse PayloadSignedPeerIds", e)
         }
 
-        // IMPORTANT: Derive remote peer ID from the credentials' identity field
-        // The identity field contains the raw 32-byte Ed25519 public key of the remote peer
-        // We derive the peer ID from this public key, NOT from the TLS certificate
+        // Decode any-sync crypto.Key proto to get raw 32-byte Ed25519 public key.
+        // Go sends Key{Type: ED25519_PUBLIC=0, Data: rawKey} → 0x12 0x20 [32 bytes] = 34 bytes.
         Log.d("PeerSignVerifier", "Credential identity length: ${payload.identity.size}")
-        val remotePeerIdFromCred = derivePeerIdFromPublicKey(payload.identity)
-        Log.d("PeerSignVerifier", "Derived remote peer ID from credentials: ${remotePeerIdFromCred.base58}")
+        val rawPubKey = decodeAnySyncCryptoKeyProto(payload.identity)
 
-        // Verify signature over (remotePeerId + localPeerId)
-        // IMPORTANT: Use the peer ID derived from credentials, not from TLS
-        // IMPORTANT: Use UTF-8 encoding explicitly to match Go implementation
-        val message = (remotePeerIdFromCred.base58 + localPeerId.base58).toByteArray(Charsets.UTF_8)
+        // Verify signature over (remotePeerId + localPeerId).
+        // IMPORTANT: Use remotePeerId directly (from TLS), NOT derived from the credential key.
+        //
+        // In any-sync, nodes have separate PeerKey (peer ID) and SignKey (for signing).
+        // account.PeerId = PeerKey.GetPublic().PeerId() — this is the remotePeerId from TLS.
+        // credential.identity = SignKey.GetPublic().Marshall() — a different key.
+        //
+        // Go's MakeCredentials signs: SignKey.Sign(account.PeerId + remotePeerId)
+        // Go's CheckCredential verifies: pubKey.Verify(remotePeerId + account.PeerId, sign)
+        //   where remotePeerId is the TLS-established peer ID, NOT derived from the credential.
+        val message = (remotePeerId.base58 + localPeerId.base58).toByteArray(Charsets.UTF_8)
         val verified = Libp2pSignature.verify(
-            publicKey = payload.identity,
+            publicKey = rawPubKey,
             message = message,
             signature = payload.sign
         )
 
         if (!verified) {
             throw HandshakeProtocolException(
-                "Signature verification failed for peer ${remotePeerIdFromCred.base58}"
+                "Signature verification failed for peer ${remotePeerId.base58}"
             )
         }
 
-        // Return identity (remote peer's public key) and version info
+        // Return raw 32-byte identity (remote peer's public key) and version info
         return HandshakeResult(
-            identity = payload.identity,
+            identity = rawPubKey,
             protoVersion = cred.version,
             clientVersion = cred.clientVersion
         )
     }
 
     /**
-     * Derive a libp2p peer ID from a raw Ed25519 public key.
+     * Decode any-sync crypto.Key proto to extract the raw 32-byte Ed25519 public key.
      *
-     * Uses identity multihash format: <code(0x00)><length(36)><protobuf-encoded-key>
+     * Go's crypto.Key{Type: ED25519_PUBLIC=0, Data: rawKey} encodes to:
+     *   0x12 (field 2, length-delimited) 0x20 (32 bytes) [32-byte key] = 34 bytes total.
+     * The Type field (ED25519_PUBLIC=0) is the proto3 default and is omitted.
      *
-     * The protobuf encoding for Ed25519 keys is: <0x08><0x01><0x12><0x20><32-byte-key>
-     *
-     * @param publicKey Raw 32-byte Ed25519 public key
-     * @return Derived peer ID
+     * @param encoded Proto-encoded Key bytes (34 bytes from Go server)
+     * @return Raw 32-byte Ed25519 public key
      */
-    private fun derivePeerIdFromPublicKey(publicKey: ByteArray): PeerId {
-        // Step 1: Create protobuf encoding of Ed25519 key
-        // Format: 08 01 12 20 <32-byte-key>
-        // - 0x08: field 1, wire type 0 (varint) for key type
-        // - 0x01: Ed25519 key type value
-        // - 0x12: field 2, wire type 2 (length-delimited) for key data
-        // - 0x20: varint encoded length (32 bytes)
-        val protobufBytes = ByteArray(4 + publicKey.size)
-        protobufBytes[0] = 0x08.toByte()
-        protobufBytes[1] = 0x01.toByte()
-        protobufBytes[2] = 0x12.toByte()
-        protobufBytes[3] = 0x20.toByte()
-        System.arraycopy(publicKey, 0, protobufBytes, 4, publicKey.size)
-
-        // Step 2: Create identity multihash
-        // Format: <code(0x00)><length(36)><protobuf>
-        val multihash = ByteArray(2 + protobufBytes.size)
-        multihash[0] = 0x00  // Identity multihash code (NOT SHA-256!)
-        multihash[1] = protobufBytes.size.toByte()  // Length of protobuf (36)
-        System.arraycopy(protobufBytes, 0, multihash, 2, protobufBytes.size)
-
-        // Step 3: Encode multihash to base58 (libp2p alphabet)
-        val base58 = encodeBase58Libp2p(multihash)
-
-        return PeerId(base58, multihash, publicKey)
+    private fun decodeAnySyncCryptoKeyProto(encoded: ByteArray): ByteArray {
+        if (encoded.size == 34 &&
+            encoded[0] == 0x12.toByte() &&
+            encoded[1] == 0x20.toByte()
+        ) {
+            return encoded.copyOfRange(2, 34)
+        }
+        // Fallback: raw 32-byte key (legacy compatibility)
+        if (encoded.size == 32) return encoded
+        throw HandshakeProtocolException(
+            "Invalid identity encoding: expected 34-byte crypto.Key proto, got ${encoded.size} bytes"
+        )
     }
 
-    /**
-     * Encode byte array to base58 (libp2p alphabet).
-     */
-    private fun encodeBase58Libp2p(input: ByteArray): String {
-        val alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-        var num = java.math.BigInteger(1, input)
-        val base = java.math.BigInteger.valueOf(58)
-        val output = StringBuilder()
-
-        while (num.compareTo(java.math.BigInteger.ZERO) > 0) {
-            val rem = num.mod(base).toInt()
-            output.append(alphabet[rem])
-            num = num.divide(base)
-        }
-
-        // Handle leading zeros
-        for (b in input) {
-            if (b.toInt() == 0) {
-                output.append('1') // '1' is alphabet[0]
-            } else {
-                break
-            }
-        }
-
-        return output.reverse().toString()
-    }
 }

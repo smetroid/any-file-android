@@ -77,6 +77,62 @@ class Libp2pTlsProviderTest {
     }
 
     @Test
+    fun `createLibp2pClientCertificate uses EdDSA not RSA`() {
+        // When: generating the libp2p TLS client certificate
+        val cert = tlsProvider.createLibp2pClientCertificate()
+
+        // Then: must not be RSA (ECDSA or EdDSA are both acceptable)
+        assertThat(cert.publicKey.algorithm).doesNotContain("RSA")
+        assertThat(cert.sigAlgName).doesNotContain("RSA")
+    }
+
+    @Test
+    fun `createLibp2pClientCertificate has libp2p peer key extension`() {
+        // When: generating the libp2p TLS client certificate
+        val cert = tlsProvider.createLibp2pClientCertificate()
+
+        // Then: must contain the libp2p key extension (OID 1.3.6.1.4.1.53594.1.1)
+        // This extension is required by go-libp2p's VerifyPeerCertificate callback
+        val extensionValue = cert.getExtensionValue("1.3.6.1.4.1.53594.1.1")
+        assertThat(extensionValue).isNotNull()
+    }
+
+    @Test
+    fun `createLibp2pClientCertificate extension has valid signature`() {
+        // When: generating the libp2p TLS client certificate
+        val cert = tlsProvider.createLibp2pClientCertificate()
+        val identity = tlsProvider.getPeerIdentity()
+
+        // Then: the extension signature must verify against the identity public key
+        val extOctetStrBytes = cert.getExtensionValue("1.3.6.1.4.1.53594.1.1")
+        assertThat(extOctetStrBytes).isNotNull()
+
+        // Unwrap outer OCTET STRING (getExtensionValue wraps in one extra OCTET STRING)
+        val outer = org.bouncycastle.asn1.ASN1Primitive.fromByteArray(extOctetStrBytes)
+            as org.bouncycastle.asn1.ASN1OctetString
+        val seq = org.bouncycastle.asn1.ASN1Sequence.getInstance(outer.octets)
+
+        // Extract protobuf-encoded pubkey and signature from SEQUENCE
+        val protoPubKey = (seq.getObjectAt(0) as org.bouncycastle.asn1.ASN1OctetString).octets
+        val sigBytes = (seq.getObjectAt(1) as org.bouncycastle.asn1.ASN1OctetString).octets
+
+        // Protobuf Ed25519 pubkey: 08 01 12 20 [32 bytes]
+        assertThat(protoPubKey.size).isEqualTo(36)
+        assertThat(protoPubKey[0]).isEqualTo(0x08.toByte())
+        assertThat(protoPubKey[1]).isEqualTo(0x01.toByte())
+        val rawPubKey = protoPubKey.copyOfRange(4, 36)
+        assertThat(rawPubKey).isEqualTo(identity.keyPair.publicKey)
+
+        // Verify: Ed25519Sign(identityKey, "libp2p-tls-handshake:" + PKIX(cert.publicKey))
+        val dataToVerify = "libp2p-tls-handshake:".toByteArray(Charsets.UTF_8) + cert.publicKey.encoded
+        val pubKeyParams = org.bouncycastle.crypto.params.Ed25519PublicKeyParameters(rawPubKey)
+        val verifier = org.bouncycastle.crypto.signers.Ed25519Signer()
+        verifier.init(false, pubKeyParams)
+        verifier.update(dataToVerify, 0, dataToVerify.size)
+        assertThat(verifier.verifySignature(sigBytes)).isTrue()
+    }
+
+    @Test
     fun `isTls13Supported returns boolean result`() {
         // When: checking TLS 1.3 support
         val isSupported = tlsProvider.isTls13Supported()

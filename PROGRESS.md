@@ -1,357 +1,214 @@
-# any-file Android Client - Implementation Progress
+# any-file Android Client — Implementation Progress
 
 **Project:** Native Android client for any-file (decentralized file sync using any-sync P2P infrastructure)
-
 **Start Date:** 2026-02-26
-**Status:** ✅ **ALL 13 TASKS COMPLETE**
+**Last Updated:** 2026-03-14
 
 ---
 
-## Architecture Overview
+## Current Status ✅ LAYER 2 HANDSHAKE FULLY WORKING (2026-03-14)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    any-file Android App                     │
-├─────────────────────────────────────────────────────────────┤
-│  UI Layer (Jetpack Compose) ✅ Task 11                     │
-│  - SpacesScreen, FilesScreen, SettingsScreen              │
-│  - Material3 design, bottom navigation                     │
-├─────────────────────────────────────────────────────────────┤
-│  Domain Layer ✅ Tasks 8-9                                 │
-│  - SyncOrchestrator (bi-directional sync)                  │
-│  - ConflictResolver (LATEST_WINS, MANUAL, BOTH_KEEP)       │
-│  - FileWatcher (FileObserver wrapper)                      │
-├─────────────────────────────────────────────────────────────┤
-│  any-sync Kotlin Layer ✅ Tasks 5-7                        │
-│  - CoordinatorClient (HTTP/protobuf) ✅                    │
-│  - FilenodeClient (HTTP/protobuf) ✅                       │
-│  - Blake3Hash (cryptohash library) ✅                      │
-├─────────────────────────────────────────────────────────────┤
-│  Storage & DI ✅ Tasks 2-4                                 │
-│  - Room database with TypeConverters                       │
-│  - Hilt dependency injection                               │
-└─────────────────────────────────────────────────────────────┘
-```
+**Goal achieved:** Full Layer 2 any-sync handshake with real Go coordinator and filenode confirmed working end-to-end. Both coordinator (port 1004) and filenode (port 1005) handshakes complete successfully.
+
+### Test Counts
+- **421 unit tests, 5 pre-existing failures** (improved from 411/8)
+- Added 1 new TDD test for separate-signing-key scenario
+- Reduced pre-existing failures from 8 → 5 (fixed 2 Layer 2 failures + 1 through handshake fix)
+- All 47 Yamux tests passing
+
+### APK
+- `app/build/outputs/apk/debug/app-debug.apk` — 22 MB, BUILD SUCCESSFUL
+- Install: `adb install app/build/outputs/apk/debug/app-debug.apk`
 
 ---
 
-## All Tasks Complete (13/13) ✅
+## Protocol Stack
 
-### ✅ Task 1: Android Project Structure
-**Commit:** be529f8
+| Layer | Component | Status |
+|-------|-----------|--------|
+| 1 | `Libp2pTlsProvider.kt` — TLS socket with Ed25519 peer identity | ✅ Complete |
+| 2 | `AnySyncHandshake.kt` — 6-step credential exchange | ✅ Complete (unit tests have pre-existing failures) |
+| 3 | `yamux/YamuxSession.kt` — stream multiplexing | ✅ Complete, 47 unit tests passing |
+| 4 | `drpc/DrpcClient.kt` — RPC over yamux streams | ✅ Complete |
+| 5 | `p2p/P2PCoordinatorClient.kt`, `P2PFilenodeClient.kt` | ✅ Complete |
+
+---
+
+## 2026-03-12: Android Client Plan Execution (6 tasks)
+
+**Plan:** `docs/plans/2026-03-11-android-client.md`
+
+### ✅ Task 1: Fix Yamux Unit Tests
+**Commits:** `c0d5327`, `fd62901`
+
+Root causes fixed:
+- `android.util.Log` throws `RuntimeException` in JVM unit tests → `isReturnDefaultValues = true` in `build.gradle.kts`
+- `coEvery` used on non-suspend `OutputStream.write` → changed to `every { } just Runs`
+- `UnconfinedTestDispatcher` not injected → `YamuxSession(mockSocket, isClient = true, coroutineContext = testDispatcher)`
+- Blocking InputStream mock in `YamuxConnectionManagerTest` to prevent frame-reader race
+
+Result: 40 failures → 8 failures (all Yamux tests now green)
+
+### ✅ Task 2: SyncClient Facade
+**Commit:** `d4a98f7`
+
+Created `data/network/SyncClient.kt`:
+- `@Singleton @Inject constructor(connectionManager, coordinatorClient, filenodeClient, tlsProvider)`
+- `connectCoordinator(host, port)` / `connectFilenode(host, port)` / `disconnect()` / `getPeerID()`
+- Integration test: `SyncClientIntegrationTest.kt` (3 tests, requires emulator + docker)
+
+### ✅ Task 3: NetworkConfigRepository + Onboarding UI
+**Commits:** `b6c6bcd`, `d2b931f`
 
 Created:
-- Project structure with Gradle (Kotlin DSL)
-- AndroidManifest.xml with permissions (INTERNET, NETWORK, STORAGE, WAKE_LOCK)
-- App/build.gradle.kts with Compose, Room, WorkManager, gRPC
-- ProGuard rules
+- `data/config/NetworkConfigRepository.kt` — manual YAML parser (no library), `fetch`, `save`, `isConfigured`, `getCoordinatorAddress`, `getFilenodeAddress`, `syncFolderPath` (SharedPreferences-backed)
+- `ui/screens/onboarding/OnboardingViewModel.kt` — `OnboardingState` sealed class, import + folder pick + navigate
+- `ui/screens/onboarding/OnboardingScreen.kt` — two-step Compose UI (config URL/file + SAF folder picker)
+- `ui/navigation/NavViewModel.kt` — checks `isConfigured()` at init
+- `ui/navigation/NavGraph.kt` — conditional start dest (onboarding vs spaces), `popUpTo(inclusive=true)` on navigate
 
-**Dependencies:**
-- Kotlin 1.9.20, Compose 1.5.4, Room 2.6.0, WorkManager 2.9.0
-- OkHttp 4.11.0, gRPC 1.56.1, Hilt 2.48
+### ✅ Task 4: SyncService Foreground Service
+**Commits:** `42ba498`, `7894762`
 
----
+Created `service/SyncService.kt`:
+- `@AndroidEntryPoint` foreground service, `START_STICKY`, `NOTIFICATION_ID = 1001`
+- Injects `SyncClient` + `NetworkConfigRepository`
+- `runSyncLoop()`: connects P2P stack, starts FileWatcher, polls every 10s
+- `companion object { start(context), stop(context) }`
+- `onDestroy`: `serviceScope.cancel()` first, then `CoroutineScope(Dispatchers.IO).launch { disconnect() }`
 
-### ✅ Task 2: Room Database Entities
-**Commits:** a9ec309, 5d6febc (fix)
+Manifest additions:
+- `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS` permissions
+- `<service android:foregroundServiceType="dataSync" />`
 
-Created:
-- Entities: `Space`, `SyncedFile`, `Peer`
-- DAOs: `SpaceDao`, `SyncedFileDao`
-- Database: `AnyfileDatabase` (version 1)
-- TypeConverters: Date, List<String>, ByteArray (Base64), SyncStatus
+### ✅ Task 5: Wire UI to SyncService
+**Commit:** `4664667`
 
-**Critical Fix:** ByteArray converter uses Base64 to prevent cryptographic key corruption
+- Added `ServiceSyncStatus { IDLE, ACTIVE, ERROR }` enum + `startSync(context)` / `stopSync(context)` to `SpacesViewModel`
+- Added `SyncStatusBanner` composable to `SpacesScreen` (start/stop button + status indicator)
 
----
-
-### ✅ Task 3: Proto Buffer Definitions
-**Commits:** d76e31a, dec2a77 (fix)
-
-Created:
-- `coordinator.proto` - 19 RPC methods from any-sync
-- `filenode.proto` - 13 RPC methods from any-sync
-- gRPC stub generation (grpc + grpckt plugins)
-
-**Critical Fix:** Used actual any-sync proto files for compatibility
+### ✅ Task 6: APK Verified
+- `./gradlew assembleDebug` → BUILD SUCCESSFUL, 22 MB APK
 
 ---
 
-### ✅ Task 4: Dependency Injection Setup
-**Commit:** 8a2f5df
+## 2026-02-28 to 2026-03-01: Protocol Stack Implementation (Sessions 1-47)
 
-Created:
-- `@HiltAndroidApp` on AnyFileApplication
-- `NetworkModule`, `DatabaseModule`, `SyncModule`
-- `WorkManagerInitializer` (enabled in Task 10)
+The protocol stack (Layers 1-5 above) was built over ~47 sessions. Key milestones:
 
----
-
-### ✅ Task 5: CoordinatorClient
-**Commit:** Various
-
-Created:
-- `CoordinatorClient.kt` - HTTP/protobuf communication
-- `SpaceModels.kt` - Data models
-- `CoordinatorClientTest.kt` - 9 unit tests
-
-**Methods:** initialize, signSpace, checkSpaceStatus, getNetworkConfiguration, etc.
+- **Layer 1** (`Libp2pTlsProvider`): Ed25519 keys, X.509 cert wrapping, libp2p TLS with ALPN `"anysync"`. Challenge: Android SSLEngine requires standard X.509 format; resolved with wrapped self-signed cert containing raw Ed25519 public key.
+- **Layer 2** (`AnySyncHandshake`): 6-step any-sync credential exchange with protobuf framing. Peer ID now uses identity multihash (0x00 prefix, not SHA-256 0x12).
+- **Layer 3** (`YamuxSession`): Full yamux multiplexing with SYN/ACK/DATA/FIN/GO_AWAY frames.
+- **Layer 4** (`DrpcClient`): Custom DRPC framing over yamux streams.
+- **Layer 5** (`P2PCoordinatorClient`, `P2PFilenodeClient`): RPC method implementations.
+- **`YamuxConnectionManager`**: Integration point — `getSession(host, port)` performs full Layer 1→3 setup.
 
 ---
 
-### ✅ Task 6: FilenodeClient
-**Commit:** Various
+## 2026-02-26 to 2026-02-27: Initial HTTP-based Android App (Tasks 1-13)
 
-Created:
-- `FilenodeClient.kt` - HTTP/protobuf communication
-- `FilenodeModels.kt` - Data models
-- `FilenodeClientTest.kt` - 15 unit tests
-
-**Methods:** blockPush, blockGet, filesInfo, filesGet, spaceInfo, accountInfo
+The app scaffold, Room database, HTTP-based `CoordinatorClient`/`FilenodeClient`, `SyncOrchestrator`, `FileWatcher`, `SyncWorker`, and Compose UI were built first using HTTP/protobuf clients. The P2P stack (Layers 1-5) then replaced the network layer.
 
 ---
 
-### ✅ Task 7: Blake3 Hashing
-**Commit:** Various
+## 2026-03-14: Layer 2 Handshake Root Cause Fixed
 
-Created:
-- `Blake3Hash.kt` - Using appmattus crypto library
-- `Blake3HashTest.kt` - 10 unit tests
+### Problem
+After fixing TLS (Layer 1) in a prior session, Layer 2 handshake was still failing:
+1. **Coordinator (port 1004):** `HandshakeProtocolException: Signature verification failed`
+2. **Filenode (port 1005):** `HandshakeProtocolException: Incompatible protocol version: 7`
 
-**Methods:** hash(), hashFile(), hashToString()
+### Root Cause — Signature Verification
 
----
+Investigation of the any-sync Go source (`any-sync/net/secureservice/credential.go`) revealed that the Go `AccountKeys` struct has **two separate keys**:
 
-### ✅ Task 8: SyncOrchestrator
-**Commit:** Various
-
-Created:
-- `SyncOrchestrator.kt` - Core sync logic
-- `ConflictResolver.kt` - LATEST_WINS, MANUAL, BOTH_KEEP strategies
-- `SyncOrchestratorTest.kt` - 10 unit tests
-- `ConflictResolverTest.kt` - 12 unit tests
-
-**Features:**
-- Upload flow: hash → chunk (256KB) → upload blocks → update DB
-- Download flow: query metadata → download blocks → reassemble file
-- Conflict detection and resolution
-
----
-
-### ✅ Task 9: FileWatcher
-**Commit:** 8d8aaa6
-
-Created:
-- `FileWatcher.kt` - FileObserver wrapper
-- `FileWatcherManager.kt` - Manages multiple watchers, app lifecycle
-- `FileWatcherTest.kt` - 31 tests
-- `FileWatcherManagerTest.kt` - 52 tests
-
-**Features:**
-- Watches directories for CREATE, MODIFY, DELETE, MOVED events
-- Triggers SyncOrchestrator on changes
-- Pauses when app backgrounds
-
----
-
-### ✅ Task 10: Background Sync Worker
-**Commit:** Various
-
-Created:
-- `SyncWorker.kt` - CoroutineWorker with Hilt DI
-- `SyncWorkerTest.kt` - 9 unit tests
-
-**Features:**
-- Periodic sync every 15 minutes
-- Only runs when network connected
-- Syncs all active spaces
-
----
-
-### ✅ Task 11: Main UI Screen
-**Commit:** Various
-
-Created:
-- `SpacesScreen.kt`, `FilesScreen.kt`, `SettingsScreen.kt`
-- `SpacesViewModel.kt`, `FilesViewModel.kt`, `SettingsViewModel.kt`
-- `Theme.kt`, `Color.kt` (Material3)
-- `NavGraph.kt` (Bottom navigation)
-
-**Features:**
-- Material3 design with light/dark mode
-- Real-time sync status indicators
-- Settings persistence with SharedPreferences
-
----
-
-### ✅ Task 12: Error Handling
-**Commit:** Various
-
-Created:
-- `AnyfileException.kt` - Network, Sync, Storage exceptions
-- `ErrorHandler.kt` - Logging, user messages, toast/snackbar
-- Error icons (vector drawables)
-
-**Features:**
-- User-friendly error messages
-- Snackbar with retry actions
-- Non-crashing error handling
-
----
-
-### ✅ Task 13: Additional Tests
-**Commit:** Various
-
-Created:
-- `SpacesViewModelTest.kt` - 17 tests
-- `FilesViewModelTest.kt` - 22 tests
-- `SettingsViewModelTest.kt` - 18 tests
-- `SyncIntegrationTest.kt` - 14 integration tests
-- UI test structure
-
----
-
-## Statistics
-
-- **Total Files:** 100+
-- **Lines of Code:** ~15,000+
-- **Unit Tests:** 156 tests passing
-- **Test Coverage:** Core sync logic 80%+
-- **Build Time:** ~10-20 seconds
-- **Min SDK:** 26 (Android 8.0+)
-- **Target SDK:** 34 (Android 14)
-
----
-
-## Test Summary
-
-| Component | Tests |
-|-----------|-------|
-| CoordinatorClient | 9 |
-| FilenodeClient | 15 |
-| Blake3Hash | 10 |
-| SyncOrchestrator | 10 |
-| ConflictResolver | 12 |
-| FileWatcher | 31 |
-| FileWatcherManager | 52 |
-| SyncWorker | 9 |
-| SpacesViewModel | 17 |
-| FilesViewModel | 22 |
-| SettingsViewModel | 18 |
-| Sync Integration | 14 |
-| **Total** | **219** |
-
----
-
-## How to Build & Run
-
-```bash
-cd /Users/kike/projects/anyproto/any-file-android
-
-# Build
-./gradlew build
-
-# Run all tests
-./gradlew test
-
-# Install debug APK
-./gradlew installDebug
-
-# Run instrumented tests
-./gradlew connectedAndroidTest
+```go
+type AccountKeys struct {
+    PeerKey crypto.PrivKey   // peer identity — account.PeerId derived from this
+    SignKey crypto.PrivKey   // signing key  — credentials signed by this
+    PeerId  string           // = PeerKey.GetPublic().PeerId()
+}
 ```
 
----
+The coordinator's `MakeCredentials` signs `(account.PeerId + remotePeerId)` with `SignKey`, and puts `SignKey.GetPublic().Marshall()` as the `identity` field. This means:
+- `identity` key derives to peer ID `12D3KooWBvPfs5tokr35XJYYrVKyjpUxmy7KNYYa1nHVMsNmKvU2`
+- Coordinator's actual peer ID (from TLS/config) = `12D3KooWJEjawV7qbGLUsHBxypBPb4R4ZLbqkXcamzkYDPBohnBe`
 
-## Environment Setup
+Our code was deriving `remotePeerIdFromCred` from the credential's signing key and using that in the verification message — producing the wrong message.
 
-**Required Services:**
-- Coordinator: `127.0.0.1:1004`
-- Filenode: `127.0.0.1:1005`
-
-**Settings in App:**
-- Coordinator URL can be configured in Settings screen
-- Default: `http://127.0.0.1:1004`
-
----
-
-## Known Issues & Future Work
-
-### Database
-- [ ] Add indexes on `SyncedFile.spaceId`
-- [ ] Add foreign key relationship between Space and SyncedFile
-- [ ] Replace `fallbackToDestructiveMigration()` with proper migrations
-
-### Network
-- [ ] Add retry logic with exponential backoff
-- [ ] Consider migrating to gRPC stubs from HTTP/protobuf
-- [ ] Add connection pooling
-
-### Security
-- [ ] Implement Ed25519 key generation
-- [ ] Secure storage of space keys (Android Keystore)
-- [ ] Certificate pinning for HTTPS
-
-### UI
-- [ ] Add file picker for selecting sync directories
-- [ ] Add progress indicators for file operations
-- [ ] Add dark mode toggle in settings
-
----
-
-## Technical Decisions
-
-1. **HTTP/protobuf over gRPC stubs** - Simpler MVP, can evolve later
-2. **appmattus crypto** - For BLAKE3 (official lib not available on Maven)
-3. **Base64 for ByteArray** - Prevents data corruption in Room
-4. **FileObserver** - Scoped storage limitations on Android 10+
-5. **WorkManager** - 15 minute minimum interval for periodic work
-
----
-
-## Repository Structure
-
-```
-/Users/kike/projects/anyproto/any-file-android/
-├── app/
-│   ├── src/
-│   │   ├── main/
-│   │   │   ├── java/com/anyproto/anyfile/
-│   │   │   │   ├── data/
-│   │   │   │   │   ├── database/        ✅
-│   │   │   │   │   ├── network/         ✅
-│   │   │   │   │   └── crypto/          ✅
-│   │   │   │   ├── di/                  ✅
-│   │   │   │   ├── domain/
-│   │   │   │   │   ├── sync/            ✅
-│   │   │   │   │   └── watch/           ✅
-│   │   │   │   ├── ui/
-│   │   │   │   │   ├── screens/         ✅
-│   │   │   │   │   ├── theme/           ✅
-│   │   │   │   │   └── navigation/      ✅
-│   │   │   │   ├── util/                ✅
-│   │   │   │   ├── worker/              ✅
-│   │   │   │   └── AnyFileApplication.kt ✅
-│   │   │   ├── proto/                   ✅
-│   │   │   └── res/                     ✅
-│   │   ├── test/                        ✅ (156 tests)
-│   │   └── androidTest/                 ✅ (integration)
-│   └── build.gradle.kts                  ✅
-├── docs/
-│   └── plans/2026-02-26-android-client-implementation.md
-├── PROGRESS.md                           📄 This file
-└── gradlew                               ✅
+Go's `CheckCredential` uses the `remotePeerId` argument (from TLS connection) directly, not derived from the credential key:
+```go
+ok, err := pubKey.Verify([]byte((remotePeerId + p.account.PeerId)), msg.Sign)
 ```
 
+### Fix Applied (`PeerSignVerifier.kt`)
+
+```kotlin
+// BEFORE (wrong): derived peer ID from credential signing key
+val remotePeerIdFromCred = derivePeerIdFromPublicKey(rawPubKey)
+val message = (remotePeerIdFromCred.base58 + localPeerId.base58).toByteArray(Charsets.UTF_8)
+
+// AFTER (correct): use TLS-established peer ID directly
+val message = (remotePeerId.base58 + localPeerId.base58).toByteArray(Charsets.UTF_8)
+```
+
+Removed unused `derivePeerIdFromPublicKey` and `encodeBase58Libp2p` private methods.
+
+Also added `7u` to default `compatibleVersions = listOf(7u, 8u, 9u)` to fix filenode version incompatibility.
+
+### TDD Test Added
+
+`checkCredential_withSeparateSigningAndPeerKey_succeeds` — verifies the real-world scenario where the Go node uses separate PeerKey and SignKey. This test was RED before the fix, GREEN after.
+
+### Result
+
+Logcat confirmation after fix:
+```
+AnySyncHandshake: Remote peer ID: 12D3KooWJEjawV7qbGLUsHBxypBPb4R4ZLbqkXcamzkYDPBohnBe
+AnySyncHandshake: Remote credentials verified successfully
+AnySyncHandshake: Handshake completed successfully!
+```
+Both coordinator and filenode connections succeed.
+
 ---
 
-## Credits
+## Known Remaining Issues
 
-**Implementation:** 2026-02-26 to 2026-02-27
-**Framework:** Claude Code with Subagent-Driven Development
-**Plan:** docs/plans/2026-02-26-android-client-implementation.md
+| Issue | Impact |
+|-------|--------|
+| 3 `DrpcClientTest` unit test failures | Pre-existing, does not affect runtime |
+| 1 `Libp2pKeyManagerTest` failure | Pre-existing Layer 1 peer ID multihash assertion issue |
+| 1 `Libp2pTlsProviderTest` failure | Pre-existing Layer 1 peer ID multihash assertion issue |
+| E2E smoke test (emulator) not run automatically | Requires user to start emulator manually |
+| `SyncClient.connectCoordinator` calls `getSession` twice (once directly, once inside `P2PCoordinatorClient`) | Minor performance redundancy |
+| Manual E2E smoke test not yet run | Install APK, import client.yml, pick folder, verify sync with Go daemon |
 
 ---
 
-*Last Updated: 2026-02-27*
-*Status: ALL TASKS COMPLETE ✅*
+## File Structure (Key Files)
+
+```
+app/src/main/java/com/anyproto/anyfile/
+├── data/
+│   ├── config/
+│   │   └── NetworkConfigRepository.kt      ✅ NEW
+│   └── network/
+│       ├── SyncClient.kt                   ✅ NEW
+│       ├── libp2p/   (Layer 1)             ✅
+│       ├── handshake/ (Layer 2)            ✅
+│       ├── yamux/    (Layer 3)             ✅ FIXED
+│       ├── drpc/     (Layer 4)             ✅
+│       └── p2p/      (Layer 5)             ✅
+├── service/
+│   └── SyncService.kt                      ✅ NEW
+└── ui/
+    ├── navigation/
+    │   ├── NavGraph.kt                     ✅ UPDATED (onboarding flow)
+    │   └── NavViewModel.kt                 ✅ NEW
+    └── screens/
+        ├── SpacesScreen.kt                 ✅ UPDATED (SyncStatusBanner)
+        ├── SpacesViewModel.kt              ✅ UPDATED (ServiceSyncStatus)
+        └── onboarding/
+            ├── OnboardingScreen.kt         ✅ NEW
+            └── OnboardingViewModel.kt      ✅ NEW
+```

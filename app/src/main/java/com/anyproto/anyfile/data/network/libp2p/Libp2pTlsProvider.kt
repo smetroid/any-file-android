@@ -5,10 +5,12 @@ import com.anyproto.anyfile.data.network.tls.TlsConnectionException
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.Security
 import javax.inject.Inject
 import javax.inject.Singleton
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 
 /**
  * Provides libp2p-style TLS connections for any-sync services.
@@ -60,9 +62,15 @@ class Libp2pTlsProvider @Inject constructor(
         private const val TLS_PROTOCOL_1_2 = "TLSv1.2"
 
         /**
-         * Application layer protocol negotiation for any-sync.
+         * Application layer protocol negotiation.
+         * The coordinator runs go-libp2p which uses the standard libp2p ALPN value.
          */
-        private const val ALPN_PROTO_ANY_SYNC = "anysync"
+        private const val ALPN_PROTO_ANY_SYNC = "libp2p"
+
+        /**
+         * Alias for the TLS key entry used in libp2p connections.
+         */
+        private const val TLS_KEY_ALIAS = "any-sync-client"
     }
 
     /**
@@ -79,11 +87,21 @@ class Libp2pTlsProvider @Inject constructor(
     private var cachedIdentity: PeerIdentity? = null
 
     /**
-     * Hybrid key manager for RSA-based TLS certificates with Ed25519 peer IDs.
-     * Lazily initialized.
+     * libp2p-compatible TLS certificate bundle (ECDSA P-256 cert + key pair).
+     *
+     * The certificate includes the libp2p extension (OID 1.3.6.1.4.1.53594.1.1)
+     * that ties the ECDSA TLS key to the Ed25519 peer identity. This is what
+     * go-libp2p's VerifyPeerCertificate callback validates.
+     *
+     * Generated lazily using the peer identity (Ed25519) to sign the extension.
      */
-    private val hybridKeyManager: HybridKeyManager by lazy {
-        HybridKeyManager(keyManager)
+    private val certBundle: LibP2pCertBundle by lazy {
+        Security.addProvider(BouncyCastleProvider())
+        val identity = getPeerIdentity()
+        Libp2pCertificateGenerator.generateLibp2pCertificate(
+            identity.keyPair.privateKey,  // 32-byte raw Ed25519 seed
+            identity.keyPair.publicKey    // 32-byte raw Ed25519 public key
+        )
     }
 
     /**
@@ -183,29 +201,30 @@ class Libp2pTlsProvider @Inject constructor(
             socket.startHandshake()
             Log.d(TAG, "TLS handshake completed successfully")
 
-            // Log session details (but NOT extracting peer ID)
+            // Extract remote peer ID from server's libp2p TLS extension.
+            // The server certificate contains OID 1.3.6.1.4.1.53594.1.1 with
+            // the server's identity public key. We derive the peer ID from it
+            // so we can include the correct remotePeerId in the any-sync credentials.
             try {
                 val session = socket.session
                 Log.d(TAG, "=== TLS Session Details ===")
                 Log.d(TAG, "Cipher suite: ${session.cipherSuite}")
                 Log.d(TAG, "Protocol: ${session.protocol}")
-                Log.d(TAG, "Peer host: ${session.peerHost}")
-                Log.d(TAG, "Peer port: ${session.peerPort}")
                 Log.d(TAG, "Application protocol (ALPN): ${getApplicationProtocol(socket)}")
-                Log.d(TAG, "Local certificates: ${session.localCertificates.size}")
-                Log.d(TAG, "Peer certificates: ${session.peerCertificates.size}")
                 if (session.peerCertificates.isNotEmpty()) {
                     val cert = session.peerCertificates[0] as java.security.cert.X509Certificate
                     Log.d(TAG, "Peer certificate subject: ${cert.subjectDN}")
-                    Log.d(TAG, "Peer certificate issuer: ${cert.issuerDN}")
-                    Log.d(TAG, "Peer certificate valid from: ${cert.notBefore} to ${cert.notAfter}")
-                    // NOTE: We do NOT extract peer ID from certificate
-                    // Peer ID will be exchanged via any-sync handshake
-                    Log.d(TAG, "Peer ID: Will be exchanged via any-sync handshake (not from certificate)")
+                    val extracted = extractPeerIdFromLibp2pExtension(cert)
+                    if (extracted != null) {
+                        remotePeerId = extracted
+                        Log.d(TAG, "Extracted remote peer ID from libp2p extension: ${extracted.base58}")
+                    } else {
+                        Log.w(TAG, "Server cert has no libp2p extension, peer ID unknown")
+                    }
                 }
                 Log.d(TAG, "=========================")
             } catch (e: Exception) {
-                Log.w(TAG, "Could not log full session details: ${e.message}", e)
+                Log.w(TAG, "Could not extract remote peer ID: ${e.message}", e)
             }
 
             socket
@@ -307,14 +326,9 @@ class Libp2pTlsProvider @Inject constructor(
         // Get our peer identity (Ed25519 for peer ID)
         val identity = getPeerIdentity()
 
-        // For hybrid TLS, ensure hybrid identity is initialized
-        if (useLibp2pTls) {
-            hybridKeyManager.getOrCreateIdentity()
-        }
-
         // Get appropriate socket factory based on configuration
         val socketFactory = if (useLibp2pTls) {
-            Log.d(TAG, "Using hybrid TLS (RSA cert) for existing connection")
+            Log.d(TAG, "Using Ed25519 TLS for connection")
             createLibp2pSslSocketFactory()
         } else {
             sslSocketFactory
@@ -408,6 +422,44 @@ class Libp2pTlsProvider @Inject constructor(
         } catch (e: Exception) {
             // Log but don't fail - connection may still work
             // In production, you might want to log this to a logging framework
+        }
+    }
+
+    /**
+     * Extract libp2p peer ID from a certificate's libp2p extension.
+     *
+     * The libp2p TLS extension (OID 1.3.6.1.4.1.53594.1.1) contains:
+     * - protobuf-encoded identity public key
+     * - signature over "libp2p-tls-handshake:" + PKIX(TLS cert public key)
+     *
+     * We extract the identity public key from the extension and derive the peer ID.
+     * This is required to include the correct remotePeerId in any-sync credentials.
+     *
+     * @param certificate The server's X.509 certificate
+     * @return The remote peer's libp2p peer ID, or null if extraction fails
+     */
+    private fun extractPeerIdFromLibp2pExtension(certificate: java.security.cert.X509Certificate): PeerId? {
+        return try {
+            val extValue = certificate.getExtensionValue("1.3.6.1.4.1.53594.1.1") ?: return null
+
+            // getExtensionValue returns DER(OCTET STRING { signedKey SEQUENCE })
+            val outer = org.bouncycastle.asn1.ASN1Primitive.fromByteArray(extValue)
+                as org.bouncycastle.asn1.ASN1OctetString
+            val seq = org.bouncycastle.asn1.ASN1Sequence.getInstance(outer.octets)
+
+            // First element is protobuf-encoded identity public key (36 bytes for Ed25519)
+            val protoPubKey = (seq.getObjectAt(0) as org.bouncycastle.asn1.ASN1OctetString).octets
+            if (protoPubKey.size != 36) {
+                Log.w(TAG, "Unexpected protobuf key size: ${protoPubKey.size}")
+                return null
+            }
+
+            // Protobuf format: 08 01 12 20 [32 bytes raw key]
+            val rawPubKey = protoPubKey.copyOfRange(4, 36)
+            keyManager.derivePeerId(rawPubKey)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to extract peer ID from libp2p extension: ${e.message}")
+            null
         }
     }
 
@@ -596,6 +648,38 @@ class Libp2pTlsProvider @Inject constructor(
      * @param keyPair The Ed25519 key pair (used for peer ID only, not TLS)
      * @return SSLSocketFactory with libp2p TLS configuration
      */
+    /**
+     * Generate the libp2p-compatible TLS client certificate for this peer.
+     *
+     * Returns an ECDSA P-256 certificate with the libp2p extension (OID 1.3.6.1.4.1.53594.1.1)
+     * that ties the TLS key to the Ed25519 peer identity. This is required by
+     * go-libp2p's VerifyPeerCertificate callback.
+     *
+     * @return ECDSA P-256 X509Certificate with libp2p extension
+     */
+    fun createLibp2pClientCertificate(): java.security.cert.X509Certificate {
+        return certBundle.certificate
+    }
+
+    /**
+     * Create an X509ExtendedKeyManager backed by an Ed25519 key pair and certificate.
+     *
+     * Avoids KeyStore incompatibility with our custom Ed25519PrivateKey class.
+     */
+    private fun createEd25519KeyManager(
+        keyPair: java.security.KeyPair,
+        cert: java.security.cert.X509Certificate,
+    ): javax.net.ssl.X509ExtendedKeyManager {
+        return object : javax.net.ssl.X509ExtendedKeyManager() {
+            override fun getClientAliases(keyType: String?, issuers: Array<out java.security.Principal>?) = arrayOf(TLS_KEY_ALIAS)
+            override fun chooseClientAlias(keyTypes: Array<out String>?, issuers: Array<out java.security.Principal>?, socket: java.net.Socket?) = TLS_KEY_ALIAS
+            override fun getServerAliases(keyType: String?, issuers: Array<out java.security.Principal>?): Array<String>? = null
+            override fun chooseServerAlias(keyType: String?, issuers: Array<out java.security.Principal>?, socket: java.net.Socket?): String? = null
+            override fun getCertificateChain(alias: String?) = if (alias == TLS_KEY_ALIAS) arrayOf(cert) else null
+            override fun getPrivateKey(alias: String?) = if (alias == TLS_KEY_ALIAS) keyPair.private else null
+        }
+    }
+
     private fun createLibp2pSslSocketFactory(): SSLSocketFactory {
         val sslContext = javax.net.ssl.SSLContext.getInstance(
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -605,61 +689,28 @@ class Libp2pTlsProvider @Inject constructor(
             }
         )
 
-        // Get peer identity for logging
+        // Generate ECDSA P-256 certificate with libp2p extension (go-libp2p compatible)
         val identity = getPeerIdentity()
+        val bundle = certBundle
+        val keyManager = createEd25519KeyManager(bundle.tlsKeyPair, bundle.certificate)
 
-        // Use hybrid key manager: RSA for TLS, Ed25519 for peer ID
-        val hybridIdentity = hybridKeyManager.getOrCreateIdentity()
-        val keyManager = hybridKeyManager.createKeyManager()
+        Log.d(TAG, "=== Using libp2p TLS (ECDSA P-256 + libp2p extension) ===")
+        Log.d(TAG, "  Peer ID: ${identity.peerId.base58}")
+        Log.d(TAG, "  Certificate algorithm: ${bundle.certificate.publicKey.algorithm}")
+        Log.d(TAG, "  Extension OID 1.3.6.1.4.1.53594.1.1 present: ${bundle.certificate.getExtensionValue("1.3.6.1.4.1.53594.1.1") != null}")
 
-        Log.d(TAG, "=== Using Hybrid TLS Approach (Session 24) ===")
-        Log.d(TAG, "  Ed25519 peer ID: ${identity.peerId.base58}")
-        Log.d(TAG, "  TLS certificate: RSA ${hybridIdentity.rsaKeyPair.public.format}")
-        Log.d(TAG, "  Certificate subject: ${hybridIdentity.certificate.subjectDN}")
-        Log.d(TAG, "  Certificate issuer: ${hybridIdentity.certificate.issuerDN}")
-
-        // WARNING: Trust-all TrustManager for testing only
-        // In production, implement proper certificate validation:
-        // 1. Extract peer ID from certificate subject CN
-        // 2. Verify against expected peer IDs (coordinator, filenode)
-        // 3. Consider certificate pinning for infrastructure peers
-        //
-        // Note: libp2p P2P authentication happens at Layer 2 (any-sync handshake),
-        // so transport-layer certificate validation is less critical than in client-server TLS.
-        // However, proper validation should still be implemented for defense in depth.
+        // Trust-all TrustManager: peer identity authenticated at Layer 2 handshake
         val trustAllCerts = arrayOf<javax.net.ssl.TrustManager>(
             object : javax.net.ssl.X509TrustManager {
-                override fun checkClientTrusted(
-                    chain: Array<java.security.cert.X509Certificate>,
-                    authType: String
-                ) {
-                    // Trust all client certificates (for peer-to-peer)
-                }
-
-                override fun checkServerTrusted(
-                    chain: Array<java.security.cert.X509Certificate>,
-                    authType: String
-                ) {
-                    // For now, trust all server certificates
-                    // TODO: Verify server certificate is from a known peer
-                }
-
-                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> {
-                    return arrayOf()
-                }
+                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
             }
         )
 
-        // Initialize SSL context with KeyManager and TrustManager
-        sslContext.init(
-            arrayOf(keyManager),
-            trustAllCerts,
-            java.security.SecureRandom()
-        )
+        sslContext.init(arrayOf(keyManager), trustAllCerts, java.security.SecureRandom())
 
-        Log.d(TAG, "Hybrid TLS socket factory created successfully")
-        Log.d(TAG, "========================================")
-
+        Log.d(TAG, "Ed25519 TLS socket factory created")
         return sslContext.socketFactory
     }
 

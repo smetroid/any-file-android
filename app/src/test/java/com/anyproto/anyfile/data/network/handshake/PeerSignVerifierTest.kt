@@ -16,13 +16,16 @@ class PeerSignVerifierTest {
 
     @Before
     fun setup() {
+        val keyManager = com.anyproto.anyfile.data.network.libp2p.Libp2pKeyManager()
+
         // Generate key pairs for Alice and Bob
         aliceKeyPair = Libp2pSignature.generateKeyPair()
         bobKeyPair = Libp2pSignature.generateKeyPair()
 
-        // Derive peer IDs (simplified - using base58 strings)
-        alicePeerId = PeerId("12D3KooWAlicePeerId1234567890ABCDEFGHIJ", byteArrayOf(), aliceKeyPair.publicKey)
-        bobPeerId = PeerId("12D3KooWBobPeerId1234567890ABCDEFGHIJK", byteArrayOf(), bobKeyPair.publicKey)
+        // Use REAL derived peer IDs so they are consistent with what
+        // PeerSignVerifier.checkCredential() derives from the public key internally.
+        alicePeerId = keyManager.derivePeerId(aliceKeyPair.publicKey)
+        bobPeerId = keyManager.derivePeerId(bobKeyPair.publicKey)
     }
 
     @Test
@@ -47,7 +50,9 @@ class PeerSignVerifierTest {
             )
         )
 
-        assertThat(payload.identity).isEqualTo(aliceKeyPair.publicKey)
+        // identity is any-sync crypto.Key proto: Key{Type: ED25519_PUBLIC=0, Data: rawKey}
+        // wire format: 0x12 (field 2, length-delimited) 0x20 (32 bytes) [32 bytes] = 34 bytes
+        assertThat(payload.identity).isEqualTo(aliceKeyPair.encodePublicKeyProto())
     }
 
     @Test
@@ -62,9 +67,12 @@ class PeerSignVerifierTest {
             )
         )
 
+        // identity is proto-encoded (34 bytes); extract raw 32-byte key for verification
+        val rawKey = payload.identity.copyOfRange(2, 34)  // skip 0x12 0x20 header
+
         // Verify the signature
         val message = (alicePeerId.base58 + bobPeerId.base58).toByteArray()
-        val verified = Libp2pSignature.verify(payload.identity, message, payload.sign)
+        val verified = Libp2pSignature.verify(rawKey, message, payload.sign)
 
         assertThat(verified).isTrue()
     }
@@ -125,14 +133,16 @@ class PeerSignVerifierTest {
         val aliceChecker = PeerSignVerifier(aliceKeyPair, alicePeerId)
         val bobChecker = PeerSignVerifier(bobKeyPair, bobPeerId)
 
+        // Alice creates credentials for a different peer (not Bob).
+        // checkCredential uses remotePeerId (from TLS) as the first part of the verified message.
+        // Alice signed (alicePeerId + charliePeerId), but Bob verifies (alicePeerId + bobPeerId).
+        // The message doesn't match, so signature verification fails.
         val charliePeerId = PeerId("12D3KooWCharliePeerId123456", byteArrayOf(), byteArrayOf())
+        val aliceCredForCharlie = aliceChecker.makeCredentials(charliePeerId)
 
-        // Alice creates credentials for Bob
-        val aliceCred = aliceChecker.makeCredentials(bobPeerId)
-
-        // Charlie tries to use Alice's credentials (should fail because signature is for Bob)
+        // Bob verifies Alice's credentials (signed for Charlie, not Bob) — should fail
         val exception = org.junit.Assert.assertThrows(HandshakeProtocolException::class.java) {
-            bobChecker.checkCredential(charliePeerId, aliceCred)
+            bobChecker.checkCredential(alicePeerId, aliceCredForCharlie)
         }
 
         assertThat(exception.message).contains("Signature verification failed")
@@ -207,6 +217,69 @@ class PeerSignVerifierTest {
         val cred = checker.makeCredentials(bobPeerId)
 
         assertThat(cred.version).isEqualTo(protoVersion)
+    }
+
+    /**
+     * TDD RED: makeCredentials must encode identity as any-sync crypto.Key proto.
+     *
+     * Go coordinator calls crypto.UnmarshalEd25519PublicKeyProto(payload.Identity).
+     * This expects Key{Type: ED25519_PUBLIC=0, Data: rawKey} wire format:
+     *   0x12 (field 2, length-delimited) 0x20 (32 bytes) [32 bytes] = 34 bytes.
+     * Sending raw 32 bytes causes INVALID_CREDENTIALS on the Go side.
+     */
+    @Test
+    fun makeCredentials_identity_isAnySyncCryptoKeyProtoEncoded() {
+        val checker = PeerSignVerifier(aliceKeyPair, alicePeerId)
+
+        val cred = checker.makeCredentials(bobPeerId)
+
+        val payload = PayloadSignedPeerIds.fromProto(
+            com.anyproto.anyfile.protos.PayloadSignedPeerIds.parseFrom(
+                com.google.protobuf.ByteString.copyFrom(cred.payload!!)
+            )
+        )
+
+        // any-sync crypto.Key{Type: ED25519_PUBLIC=0 (omitted), Data: 32 bytes}
+        // wire: 0x12 0x20 [32 bytes] = 34 bytes
+        assertThat(payload.identity.size).isEqualTo(34)
+        assertThat(payload.identity[0]).isEqualTo(0x12.toByte())
+        assertThat(payload.identity[1]).isEqualTo(0x20.toByte())
+        assertThat(payload.identity.copyOfRange(2, 34)).isEqualTo(aliceKeyPair.publicKey)
+    }
+
+    /**
+     * TDD RED: any-sync nodes have separate PeerKey (for peer ID) and SignKey (for signing).
+     *
+     * The real Go coordinator calls:
+     *   sign = SignKey.Sign(account.PeerId + remotePeerId)
+     *   identity = SignKey.GetPublic().Marshall()
+     *
+     * So `identity` key derives to a DIFFERENT peer ID than `account.PeerId`.
+     * CheckCredential must use remotePeerId directly (from TLS/argument), NOT derive it from
+     * the credential's identity key.
+     */
+    @Test
+    fun checkCredential_withSeparateSigningAndPeerKey_succeeds() {
+        val keyManager = com.anyproto.anyfile.data.network.libp2p.Libp2pKeyManager()
+
+        // Simulate coordinator: peerKey for peer ID, signKey for signing
+        val coordinatorPeerKeyPair = Libp2pSignature.generateKeyPair()
+        val coordinatorSignKeyPair = Libp2pSignature.generateKeyPair()
+        val coordinatorPeerId = keyManager.derivePeerId(coordinatorPeerKeyPair.publicKey)
+
+        // Note: PeerSignVerifier uses localKeyPair for signing, localPeerId as identity string
+        val coordinatorChecker = PeerSignVerifier(coordinatorSignKeyPair, coordinatorPeerId)
+        val bobChecker = PeerSignVerifier(bobKeyPair, bobPeerId)
+
+        // Coordinator makes credentials for Bob
+        val coordCred = coordinatorChecker.makeCredentials(bobPeerId)
+
+        // Bob verifies coordinator's credentials using coordinatorPeerId from TLS
+        // (not derived from the credential's signing key — which would be different)
+        val result = bobChecker.checkCredential(coordinatorPeerId, coordCred)
+
+        assertThat(result.identity).isEqualTo(coordinatorSignKeyPair.publicKey)
+        assertThat(result.protoVersion).isEqualTo(8u)
     }
 
     @Test
