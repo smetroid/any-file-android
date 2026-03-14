@@ -1,0 +1,26 @@
+# See https://pre-commit.com for more information
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+        description: Prevents committing APKs or other large binaries
+      - id: check-yaml
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.16.0
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: android-unit-tests
+        name: Android unit tests
+        entry: ./gradlew test
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
