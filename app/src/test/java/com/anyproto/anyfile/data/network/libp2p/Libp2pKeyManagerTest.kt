@@ -148,10 +148,10 @@ class Libp2pKeyManagerTest {
         val peerId = keyManager.derivePeerId(keyPair.publicKey)
 
         // Then: multihash should have correct format
-        // Multihash: <code><length><hash>
-        assertThat(peerId.multihash.size).isEqualTo(34) // 1 + 1 + 32
-        assertThat(peerId.multihash[0].toInt() and 0xFF).isEqualTo(0x12) // SHA-256 code
-        assertThat(peerId.multihash[1].toInt() and 0xFF).isEqualTo(32) // Hash length
+        // Identity multihash: <0x00 identity codec><0x24 = 36 length><4-byte proto header><32-byte raw key>
+        assertThat(peerId.multihash.size).isEqualTo(38) // 2-byte header + 4-byte proto header + 32-byte key
+        assertThat(peerId.multihash[0].toInt() and 0xFF).isEqualTo(0x00) // identity codec
+        assertThat(peerId.multihash[1].toInt() and 0xFF).isEqualTo(0x24) // 36 bytes (protobuf-encoded key length)
     }
 
     @Test
