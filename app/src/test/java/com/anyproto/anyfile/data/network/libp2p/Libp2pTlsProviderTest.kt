@@ -55,8 +55,8 @@ class Libp2pTlsProviderTest {
 
         // Then: peer ID should be valid
         assertThat(identity.peerId.base58).isNotEmpty()
-        assertThat(identity.peerId.multihash.size).isEqualTo(34) // 1 + 1 + 32
-        assertThat(identity.peerId.multihash[0].toInt() and 0xFF).isEqualTo(0x12) // SHA-256
+        assertThat(identity.peerId.multihash.size).isEqualTo(38) // 2-byte header + 4-byte proto header + 32-byte key
+        assertThat(identity.peerId.multihash[0].toInt() and 0xFF).isEqualTo(0x00) // identity codec
     }
 
     @Test
