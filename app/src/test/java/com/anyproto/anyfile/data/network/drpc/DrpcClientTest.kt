@@ -78,6 +78,7 @@ class DrpcClientTest {
 
         // Mock stream behavior
         coEvery { mockSession.openStream() } returns mockStream
+        coEvery { mockStream.waitForOpen() } just Runs
         coEvery { mockStream.write(any()) } just Runs
         coEvery { mockStream.closeWrite() } just Runs
         coEvery { mockStream.close() } just Runs
@@ -120,6 +121,7 @@ class DrpcClientTest {
 
         // Mock stream behavior
         coEvery { mockSession.openStream() } returns mockStream
+        coEvery { mockStream.waitForOpen() } just Runs
         coEvery { mockStream.write(any()) } just Runs
         coEvery { mockStream.closeWrite() } just Runs
         coEvery { mockStream.close() } just Runs
@@ -223,6 +225,7 @@ class DrpcClientTest {
         val expectedResponse = SpaceSignResponse.newBuilder().build()
 
         coEvery { mockSession.openStream() } returns mockStream
+        coEvery { mockStream.waitForOpen() } just Runs
         coEvery { mockStream.write(any()) } just Runs
         coEvery { mockStream.closeWrite() } just Runs
         coEvery { mockStream.close() } just Runs
