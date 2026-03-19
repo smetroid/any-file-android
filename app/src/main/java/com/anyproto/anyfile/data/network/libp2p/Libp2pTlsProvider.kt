@@ -177,19 +177,32 @@ class Libp2pTlsProvider @Inject constructor(
         // remotePeerId will remain null and be populated from the handshake
         var remotePeerId: PeerId? = null
 
+        // Create raw TCP socket first so yamux can use it directly after credential exchange.
+        // Go any-sync runs yamux on raw TCP (not TLS) — TLS is only used for the credential
+        // handshake. After the handshake, Android must also switch to raw TCP for yamux.
+        Log.d(TAG, "Step 1: Creating raw TCP socket and connecting to $host:$port...")
+        val rawTcpSocket = try {
+            java.net.Socket().also { raw ->
+                raw.soTimeout = DEFAULT_READ_TIMEOUT_MS
+                raw.connect(InetSocketAddress(host, port), timeoutMs)
+            }
+        } catch (e: IOException) {
+            Log.e(TAG, "Failed to connect raw TCP to $host:$port", e)
+            throw Libp2pTlsException("Failed to connect to $host:$port: ${e.message}", e)
+        }
+        Log.d(TAG, "Raw TCP connected to $host:$port")
+
         // Create and connect the socket with detailed logging
         val socket = try {
-            Log.d(TAG, "Step 1: Creating SSL socket...")
-            val socket = socketFactory.createSocket() as? SSLSocket
-                ?: throw Libp2pTlsException("Failed to create SSL socket")
+            // Wrap raw socket with SSLSocket. autoClose=false keeps rawTcpSocket alive
+            // for yamux to use after the credential exchange.
+            Log.d(TAG, "Step 2: Wrapping raw TCP with SSLSocket (autoClose=false)...")
+            val socket = socketFactory.createSocket(rawTcpSocket, host, port, false) as? SSLSocket
+                ?: run {
+                    rawTcpSocket.close()
+                    throw Libp2pTlsException("Failed to create SSL socket")
+                }
             Log.d(TAG, "SSL socket created successfully")
-
-            // Configure timeouts
-            socket.soTimeout = DEFAULT_READ_TIMEOUT_MS
-            Log.d(TAG, "Step 2: Connecting TCP to $host:$port (timeout: ${timeoutMs}ms)...")
-
-            socket.connect(InetSocketAddress(host, port), timeoutMs)
-            Log.d(TAG, "TCP connected successfully to $host:$port")
 
             // Configure TLS parameters (ALPN, SNI, protocols)
             Log.d(TAG, "Step 3: Configuring TLS parameters (ALPN: $alpnStatus, SNI: $host)...")
@@ -237,6 +250,7 @@ class Libp2pTlsProvider @Inject constructor(
             Log.e(TAG, "Error message: ${e.message}")
             Log.e(TAG, "Stack trace:", e)
             Log.e(TAG, "========================================")
+            rawTcpSocket.runCatching { close() }
             throw Libp2pTlsException(
                 "Failed to connect to $host:$port: ${e.message}",
                 e
@@ -250,6 +264,7 @@ class Libp2pTlsProvider @Inject constructor(
             Log.e(TAG, "Error message: ${e.message}")
             Log.e(TAG, "Stack trace:", e)
             Log.e(TAG, "==========================================")
+            rawTcpSocket.runCatching { close() }
             throw Libp2pTlsException(
                 "TLS handshake failed with $host:$port: ${e.message}",
                 e
@@ -262,6 +277,7 @@ class Libp2pTlsProvider @Inject constructor(
             Log.e(TAG, "Error message: ${e.message}")
             Log.e(TAG, "Stack trace:", e)
             Log.e(TAG, "================================================")
+            rawTcpSocket.runCatching { close() }
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "=== TLS Connection Failed (Unexpected Exception) ===")
@@ -272,6 +288,7 @@ class Libp2pTlsProvider @Inject constructor(
             Log.e(TAG, "Error message: ${e.message}")
             Log.e(TAG, "Stack trace:", e)
             Log.e(TAG, "====================================================")
+            rawTcpSocket.runCatching { close() }
             throw Libp2pTlsException(
                 "Unexpected error connecting to $host:$port: ${e.message}",
                 e
@@ -280,6 +297,7 @@ class Libp2pTlsProvider @Inject constructor(
 
         return Libp2pTlsSocket(
             socket = socket,
+            rawSocket = rawTcpSocket,
             localPeerId = identity.peerId,
             localKeyPair = identity.keyPair,
             remotePeerId = remotePeerId
@@ -374,6 +392,7 @@ class Libp2pTlsProvider @Inject constructor(
 
         return Libp2pTlsSocket(
             socket = sslSocket,
+            rawSocket = socket,  // The original plain socket passed in
             localPeerId = identity.peerId,
             localKeyPair = identity.keyPair,
             remotePeerId = remotePeerId
@@ -781,13 +800,15 @@ data class PeerIdentity(
  * The any-sync handshake layer will use the peer IDs to authenticate
  * the connection.
  *
- * @property socket The underlying SSL socket
+ * @property socket The SSLSocket used for TLS + credential exchange
+ * @property rawSocket The underlying raw TCP socket (used for yamux after credential exchange)
  * @property localPeerId The client's peer ID
  * @property localKeyPair The client's key pair
  * @property remotePeerId The server's peer ID (set after handshake, null initially)
  */
 data class Libp2pTlsSocket(
     val socket: SSLSocket,
+    val rawSocket: java.net.Socket?,  // Underlying TCP socket for yamux (post-handshake)
     val localPeerId: PeerId,
     val localKeyPair: Libp2pKeyPair,
     var remotePeerId: PeerId? = null

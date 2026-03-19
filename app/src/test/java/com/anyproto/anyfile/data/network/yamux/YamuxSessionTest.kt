@@ -153,10 +153,11 @@ class YamuxSessionTest {
         val version = writtenData[0].toInt() and 0xFF
         val type = writtenData[1].toInt() and 0xFF
         val flagsLow = writtenData[3].toInt() and 0xFF
-        val streamId = ((writtenData[8].toInt() and 0xFF) shl 24) or
-                      ((writtenData[9].toInt() and 0xFF) shl 16) or
-                      ((writtenData[10].toInt() and 0xFF) shl 8) or
-                      (writtenData[11].toInt() and 0xFF)
+        // StreamID is at bytes 4-7 per hashicorp/yamux spec
+        val streamId = ((writtenData[4].toInt() and 0xFF) shl 24) or
+                      ((writtenData[5].toInt() and 0xFF) shl 16) or
+                      ((writtenData[6].toInt() and 0xFF) shl 8) or
+                      (writtenData[7].toInt() and 0xFF)
 
         assertEquals(0x00, version) // Yamux version
         assertEquals(0x00, type) // DATA frame
@@ -295,10 +296,11 @@ class YamuxSessionTest {
 
         // Assert
         val writtenData = outputCapture.toByteArray()
-        val errorCode = ((writtenData[4].toInt() and 0xFF) shl 24) or
-                       ((writtenData[5].toInt() and 0xFF) shl 16) or
-                       ((writtenData[6].toInt() and 0xFF) shl 8) or
-                       (writtenData[7].toInt() and 0xFF)
+        // Error code is at bytes 8-11 per hashicorp/yamux spec (StreamID=0 is at 4-7)
+        val errorCode = ((writtenData[8].toInt() and 0xFF) shl 24) or
+                       ((writtenData[9].toInt() and 0xFF) shl 16) or
+                       ((writtenData[10].toInt() and 0xFF) shl 8) or
+                       (writtenData[11].toInt() and 0xFF)
 
         assertEquals(1, errorCode) // PROTOCOL_ERROR
     }

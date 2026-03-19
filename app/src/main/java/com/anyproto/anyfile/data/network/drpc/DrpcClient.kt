@@ -124,17 +124,12 @@ class DrpcClient @Inject constructor(
         }
 
         try {
-            // Wait for the stream to become OPEN (receive ACK for outbound streams)
-            Log.d(TAG, "Waiting for stream to become OPEN...")
-            stream.waitForOpen()
-            Log.d(TAG, "Stream is OPEN, ready to send data")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to wait for stream to open", e)
-            throw DrpcConnectionException("Failed to establish stream", e)
-        }
-
-        try {
             withTimeout(timeoutMs) {
+                // Wait for the stream to become OPEN (receive ACK for outbound streams)
+                Log.d(TAG, "Waiting for stream to become OPEN...")
+                stream.waitForOpen()
+                Log.d(TAG, "Stream is OPEN, ready to send data")
+
                 // Send the request
                 Log.d(TAG, "Sending DRPC request...")
                 sendRequest(stream, service, method, request)
@@ -321,6 +316,70 @@ class DrpcClient @Inject constructor(
     }
 
     /**
+     * Make a streaming RPC call and collect all response frames.
+     *
+     * Used for server-streaming RPCs (e.g. FilesGet) where the server sends
+     * multiple DRPC frames on the same stream until it closes.
+     */
+    suspend fun <T : MessageLite> callStreamingAsync(
+        service: String,
+        method: String,
+        request: MessageLite,
+        responseParser: Parser<T>,
+        timeoutMs: Long = defaultTimeoutMs
+    ): List<T> = withContext(Dispatchers.IO) {
+        Log.d(TAG, "=== DRPC Streaming Call: $service.$method ===")
+
+        val stream = try {
+            session.openStream()
+        } catch (e: Exception) {
+            throw DrpcConnectionException("Failed to open yamux stream for streaming RPC call", e)
+        }
+
+        try {
+            withTimeout(timeoutMs) {
+                stream.waitForOpen()
+                sendRequest(stream, service, method, request)
+                val allData = readAllData(stream)
+                decodeStreamingResponses(allData, responseParser)
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            stream.close()
+            throw DrpcTimeoutException("Streaming RPC call to $service.$method timed out", e)
+        } catch (e: DrpcException) {
+            stream.close()
+            throw e
+        } catch (e: Exception) {
+            stream.close()
+            throw DrpcConnectionException("Streaming RPC call to $service.$method failed", e)
+        } finally {
+            if (stream.state != YamuxStream.State.CLOSED) {
+                try { stream.closeWrite() } catch (e: Exception) { /* ignore */ }
+            }
+        }
+    }
+
+    private fun <T : MessageLite> decodeStreamingResponses(
+        data: ByteArray,
+        responseParser: Parser<T>
+    ): List<T> {
+        if (data.isEmpty()) return emptyList()
+        val results = mutableListOf<T>()
+        var offset = 0
+        while (offset < data.size) {
+            val (messageData, bytesRead) = DrpcEncoding.decodeMessageWithLength(data, offset)
+            offset += bytesRead
+            val decoded = DrpcResponse.decode(messageData)
+            if (!decoded.success) {
+                val errorMsg = if (decoded.payload.isNotEmpty()) String(decoded.payload) else "Unknown error"
+                throw DrpcRpcException(code = decoded.errorCode, message = errorMsg)
+            }
+            results.add(responseParser.parseFrom(decoded.payload))
+        }
+        return results
+    }
+
+    /**
      * Check if the client session is active.
      *
      * @return true if the session is active, false otherwise
@@ -364,4 +423,16 @@ suspend fun <T : MessageLite> DrpcClient.filenodeCall(
     timeoutMs: Long = DrpcClient.DEFAULT_TIMEOUT_MS
 ): T {
     return call("filesync.File", method, request, responseParser, timeoutMs)
+}
+
+/**
+ * Convenience extension for server-streaming filenode calls (e.g. FilesGet).
+ */
+suspend fun <T : MessageLite> DrpcClient.filenodeStreamingCall(
+    method: String,
+    request: MessageLite,
+    responseParser: Parser<T>,
+    timeoutMs: Long = DrpcClient.DEFAULT_TIMEOUT_MS
+): List<T> {
+    return callStreamingAsync("filesync.File", method, request, responseParser, timeoutMs)
 }

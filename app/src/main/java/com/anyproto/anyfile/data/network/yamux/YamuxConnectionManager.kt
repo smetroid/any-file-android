@@ -195,9 +195,14 @@ class YamuxConnectionManager @Inject constructor(
                 Log.d(TAG, "any-sync handshake completed successfully")
 
                 // Create yamux session (client mode)
-                // YamuxSession uses the underlying SSLSocket from the authenticated session
-                Log.d(TAG, "Step 3: Creating yamux session...")
-                val session = YamuxSession(secureSession.socket.socket, isClient = true)
+                // IMPORTANT: Use raw TCP socket (not SSLSocket) for yamux.
+                // Go any-sync runs yamux on raw TCP after the credential exchange —
+                // TLS is only used for the handshake phase. Sending yamux frames over
+                // TLS causes the filenode to see 0x17 (TLS Application Data) as the
+                // yamux version byte instead of 0x00.
+                Log.d(TAG, "Step 3: Creating yamux session on raw TCP socket...")
+                val rawSocket = libp2pSocket.rawSocket ?: libp2pSocket.socket
+                val session = YamuxSession(rawSocket, isClient = true)
 
                 // Cache the session before starting to prevent race conditions
                 cacheSession(key, session, host, port)

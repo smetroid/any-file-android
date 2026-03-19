@@ -224,25 +224,6 @@ class YamuxStream(
             !localFinSent) {
             dataChannel.close()
         }
-        if (frame.data.isNotEmpty() && !closed) {
-            try {
-                dataChannel.send(frame.data)
-
-                // Update receive window
-                val dataConsumed = frame.data.size
-                if (dataConsumed > 0) {
-                    receiveWindow -= dataConsumed
-                    // Send window update if we've consumed enough data
-                    if (receiveWindow < initialWindowSize / 2) {
-                        sendWindowUpdate(initialWindowSize - receiveWindow)
-                        receiveWindow = initialWindowSize
-                    }
-                }
-            } catch (e: Exception) {
-                // Channel closed or failed
-                close(YamuxStreamException("Failed to queue received data", e))
-            }
-        }
     }
 
     /**
@@ -253,6 +234,29 @@ class YamuxStream(
     suspend fun handleWindowUpdate(delta: Int) {
         lock.withLock {
             sendWindow += delta
+        }
+    }
+
+    /**
+     * Handle a WINDOW_UPDATE+ACK frame — this is how the Go yamux server acknowledges
+     * a client SYN (hashicorp/yamux sends typeWindowUpdate|flagACK as the SYN-ACK).
+     *
+     * Transitions SYN_SENT → OPEN and completes openDeferred so waitForOpen() unblocks.
+     *
+     * @param delta The initial send window granted by the remote
+     */
+    suspend fun handleWindowUpdateAck(delta: Int) {
+        val shouldSignal = lock.withLock {
+            sendWindow += delta
+            if (_state == State.SYN_SENT) {
+                _state = State.OPEN
+                true
+            } else {
+                false
+            }
+        }
+        if (shouldSignal) {
+            openDeferred.complete(Unit)
         }
     }
 

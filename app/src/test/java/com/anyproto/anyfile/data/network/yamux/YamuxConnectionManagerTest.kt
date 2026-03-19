@@ -60,6 +60,7 @@ class YamuxConnectionManagerTest {
         val localPeerId = keyManager.derivePeerId(keyManager.getDefaultKeyPair().publicKey)
         val mockLibp2pTlsSocket = Libp2pTlsSocket(
             socket = mockSocket,
+            rawSocket = null,
             localPeerId = localPeerId,
             localKeyPair = keyManager.getDefaultKeyPair()
         )

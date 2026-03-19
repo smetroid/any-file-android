@@ -44,17 +44,17 @@ class YamuxProtocolTest {
         assertEquals(0x00, encoded[2].toInt() and 0xFF)
         assertEquals(0x01, encoded[3].toInt() and 0xFF)
 
-        // Length: 5 (4 bytes, big-endian)
+        // StreamID: 1 (4 bytes, big-endian) — bytes 4-7 per hashicorp/yamux spec
         assertEquals(0x00, encoded[4].toInt() and 0xFF)
         assertEquals(0x00, encoded[5].toInt() and 0xFF)
         assertEquals(0x00, encoded[6].toInt() and 0xFF)
-        assertEquals(0x05, encoded[7].toInt() and 0xFF)
+        assertEquals(0x01, encoded[7].toInt() and 0xFF)
 
-        // StreamID: 1 (4 bytes, big-endian)
+        // Length: 5 (4 bytes, big-endian) — bytes 8-11
         assertEquals(0x00, encoded[8].toInt() and 0xFF)
         assertEquals(0x00, encoded[9].toInt() and 0xFF)
         assertEquals(0x00, encoded[10].toInt() and 0xFF)
-        assertEquals(0x01, encoded[11].toInt() and 0xFF)
+        assertEquals(0x05, encoded[11].toInt() and 0xFF)
 
         // Payload
         assertEquals(5, encoded.size - 12)
@@ -117,17 +117,17 @@ class YamuxProtocolTest {
         assertEquals(0x00, encoded[2].toInt() and 0xFF)
         assertEquals(0x01, encoded[3].toInt() and 0xFF) // Flags: SYN
 
-        // Length for WINDOW_UPDATE is the delta value
+        // StreamID: 5 (4 bytes, big-endian) — bytes 4-7 per hashicorp/yamux spec
         assertEquals(0x00, encoded[4].toInt() and 0xFF)
         assertEquals(0x00, encoded[5].toInt() and 0xFF)
-        assertEquals(0x04, encoded[6].toInt() and 0xFF) // 1024 = 0x0400
-        assertEquals(0x00, encoded[7].toInt() and 0xFF)
+        assertEquals(0x00, encoded[6].toInt() and 0xFF)
+        assertEquals(0x05, encoded[7].toInt() and 0xFF)
 
-        // StreamID
+        // Delta: 1024 = 0x00000400 (4 bytes, big-endian) — bytes 8-11
         assertEquals(0x00, encoded[8].toInt() and 0xFF)
         assertEquals(0x00, encoded[9].toInt() and 0xFF)
-        assertEquals(0x00, encoded[10].toInt() and 0xFF)
-        assertEquals(0x05, encoded[11].toInt() and 0xFF)
+        assertEquals(0x04, encoded[10].toInt() and 0xFF)
+        assertEquals(0x00, encoded[11].toInt() and 0xFF)
     }
 
     @Test
@@ -147,11 +147,17 @@ class YamuxProtocolTest {
         assertEquals(0x00, encoded[2].toInt() and 0xFF)
         assertEquals(0x01, encoded[3].toInt() and 0xFF) // Flags: SYN
 
-        // Length is the ping value (4 bytes)
+        // StreamID: 0 (always 0 for PING) — bytes 4-7 per hashicorp/yamux spec
         assertEquals(0x00, encoded[4].toInt() and 0xFF)
         assertEquals(0x00, encoded[5].toInt() and 0xFF)
-        assertEquals(0x30, encoded[6].toInt() and 0xFF) // 12345 = 0x3039
-        assertEquals(0x39, encoded[7].toInt() and 0xFF)
+        assertEquals(0x00, encoded[6].toInt() and 0xFF)
+        assertEquals(0x00, encoded[7].toInt() and 0xFF)
+
+        // Ping value: 12345 = 0x3039 — bytes 8-11
+        assertEquals(0x00, encoded[8].toInt() and 0xFF)
+        assertEquals(0x00, encoded[9].toInt() and 0xFF)
+        assertEquals(0x30, encoded[10].toInt() and 0xFF)
+        assertEquals(0x39, encoded[11].toInt() and 0xFF)
     }
 
     @Test
@@ -183,8 +189,8 @@ class YamuxProtocolTest {
             0x00,                   // Version
             0x00,                   // Type: DATA
             0x00, 0x01.toByte(),   // Flags: SYN
-            0x00, 0x00, 0x00, 0x05, // Length: 5
-            0x00, 0x00, 0x00, 0x01  // StreamID: 1
+            0x00, 0x00, 0x00, 0x01, // StreamID: 1 (bytes 4-7 per hashicorp/yamux spec)
+            0x00, 0x00, 0x00, 0x05  // Length: 5 (bytes 8-11)
         )
         val payload = byteArrayOf(1, 2, 3, 4, 5)
         val frameBytes = header + payload
@@ -209,8 +215,8 @@ class YamuxProtocolTest {
             0x00,                   // Version
             0x01,                   // Type: WINDOW_UPDATE
             0x00, 0x01.toByte(),   // Flags: SYN
-            0x00, 0x00, 0x04, 0x00, // Length (delta): 1024
-            0x00, 0x00, 0x00, 0x05  // StreamID: 5
+            0x00, 0x00, 0x00, 0x05, // StreamID: 5 (bytes 4-7 per hashicorp/yamux spec)
+            0x00, 0x00, 0x04, 0x00  // Delta: 1024 (bytes 8-11)
         )
         val inputStream = ByteArrayInputStream(header)
 
@@ -231,8 +237,8 @@ class YamuxProtocolTest {
             0x00,                   // Version
             0x02,                   // Type: PING
             0x00, 0x01.toByte(),   // Flags: SYN
-            0x00, 0x00, 0x30, 0x39, // Length (ping value): 12345
-            0x00, 0x00, 0x00, 0x00  // StreamID: 0 (always 0 for PING)
+            0x00, 0x00, 0x00, 0x00, // StreamID: 0 (always 0 for PING, bytes 4-7)
+            0x00, 0x00, 0x30, 0x39  // Ping value: 12345 (bytes 8-11)
         )
         val inputStream = ByteArrayInputStream(header)
 
@@ -252,8 +258,8 @@ class YamuxProtocolTest {
             0x00,                   // Version
             0x03,                   // Type: GO_AWAY
             0x00, 0x00,            // Flags: none
-            0x00, 0x00, 0x00, 0x02, // Length (error code): 2
-            0x00, 0x00, 0x00, 0x00  // StreamID: 0 (always 0 for GO_AWAY)
+            0x00, 0x00, 0x00, 0x00, // StreamID: 0 (always 0 for GO_AWAY, bytes 4-7)
+            0x00, 0x00, 0x00, 0x02  // Error code: 2 = RECEIVED_GO_AWAY (bytes 8-11)
         )
         val inputStream = ByteArrayInputStream(header)
 
@@ -320,8 +326,8 @@ class YamuxProtocolTest {
             0x00,                   // Version
             0x00,                   // Type: DATA
             0x00, 0x01.toByte(),   // Flags: SYN
-            0x00, 0x00, 0x00, 0x0A, // Length: 10
-            0x00, 0x00, 0x00, 0x01  // StreamID: 1
+            0x00, 0x00, 0x00, 0x01, // StreamID: 1 (bytes 4-7)
+            0x00, 0x00, 0x00, 0x0A  // Length: 10 (bytes 8-11)
         )
         val incompletePayload = byteArrayOf(1, 2, 3) // Only 3 bytes instead of 10
         val frameBytes = header + incompletePayload
@@ -471,8 +477,8 @@ class YamuxProtocolTest {
             0x00,                   // Version
             0x00,                   // Type: DATA
             0x00, 0x04.toByte(),   // Flags: FIN
-            0x00, 0x00, 0x00, 0x03, // Length: 3
-            0x00, 0x00, 0x00, 0x07  // StreamID: 7
+            0x00, 0x00, 0x00, 0x07, // StreamID: 7 (bytes 4-7)
+            0x00, 0x00, 0x00, 0x03  // Length: 3 (bytes 8-11)
         )
         val payload = byteArrayOf(1, 2, 3)
         val frameBytes = header + payload

@@ -53,14 +53,15 @@ object YamuxProtocol {
         val typeValue = header[1].toInt() and 0xFF
         val flagsHigh = header[2].toInt() and 0xFF
         val flagsLow = header[3].toInt() and 0xFF
-        val length = ((header[4].toInt() and 0xFF) shl 24) or
-                     ((header[5].toInt() and 0xFF) shl 16) or
-                     ((header[6].toInt() and 0xFF) shl 8) or
-                     (header[7].toInt() and 0xFF)
-        val streamId = ((header[8].toInt() and 0xFF) shl 24) or
-                       ((header[9].toInt() and 0xFF) shl 16) or
-                       ((header[10].toInt() and 0xFF) shl 8) or
-                       (header[11].toInt() and 0xFF)
+        // Yamux spec (hashicorp/yamux): bytes 4-7 = StreamID, bytes 8-11 = Length
+        val streamId = ((header[4].toInt() and 0xFF) shl 24) or
+                       ((header[5].toInt() and 0xFF) shl 16) or
+                       ((header[6].toInt() and 0xFF) shl 8) or
+                       (header[7].toInt() and 0xFF)
+        val length = ((header[8].toInt() and 0xFF) shl 24) or
+                     ((header[9].toInt() and 0xFF) shl 16) or
+                     ((header[10].toInt() and 0xFF) shl 8) or
+                     (header[11].toInt() and 0xFF)
 
         // Validate version
         if (version != VERSION) {
@@ -86,12 +87,12 @@ object YamuxProtocol {
     private fun encodeDataFrame(frame: YamuxFrame.Data): ByteArray {
         val output = ByteArrayOutputStream()
 
-        // Header (12 bytes)
+        // Header (12 bytes) — yamux spec: StreamID at 4-7, Length at 8-11
         output.write(VERSION)                                    // Version
         output.write(YamuxFrame.Type.DATA.byteValue)            // Type
         writeFlags(output, frame.flags)                         // Flags
-        writeInt32(output, frame.data.size)                     // Length
-        writeInt32(output, frame.streamId)                      // StreamID
+        writeInt32(output, frame.streamId)                      // StreamID (bytes 4-7)
+        writeInt32(output, frame.data.size)                     // Length (bytes 8-11)
 
         // Payload
         output.write(frame.data)
@@ -105,12 +106,12 @@ object YamuxProtocol {
     private fun encodeWindowUpdateFrame(frame: YamuxFrame.WindowUpdate): ByteArray {
         val output = ByteArrayOutputStream()
 
-        // Header (12 bytes)
+        // Header (12 bytes) — yamux spec: StreamID at 4-7, Length/delta at 8-11
         output.write(VERSION)                                        // Version
         output.write(YamuxFrame.Type.WINDOW_UPDATE.byteValue)       // Type
         writeFlags(output, frame.flags)                             // Flags
-        writeInt32(output, frame.delta)                             // Length (delta)
-        writeInt32(output, frame.streamId)                          // StreamID
+        writeInt32(output, frame.streamId)                          // StreamID (bytes 4-7)
+        writeInt32(output, frame.delta)                             // Delta (bytes 8-11)
 
         return output.toByteArray()
     }
@@ -121,12 +122,12 @@ object YamuxProtocol {
     private fun encodePingFrame(frame: YamuxFrame.Ping): ByteArray {
         val output = ByteArrayOutputStream()
 
-        // Header (12 bytes)
+        // Header (12 bytes) — yamux spec: StreamID at 4-7, ping value at 8-11
         output.write(VERSION)                                   // Version
         output.write(YamuxFrame.Type.PING.byteValue)           // Type
         writeFlags(output, frame.flags)                        // Flags
-        writeInt32(output, frame.value)                        // Length (ping value)
-        writeInt32(output, 0)                                  // StreamID (always 0)
+        writeInt32(output, 0)                                  // StreamID (always 0, bytes 4-7)
+        writeInt32(output, frame.value)                        // Ping value (bytes 8-11)
 
         return output.toByteArray()
     }
@@ -137,12 +138,12 @@ object YamuxProtocol {
     private fun encodeGoAwayFrame(frame: YamuxFrame.GoAway): ByteArray {
         val output = ByteArrayOutputStream()
 
-        // Header (12 bytes)
+        // Header (12 bytes) — yamux spec: StreamID at 4-7, error code at 8-11
         output.write(VERSION)                                   // Version
         output.write(YamuxFrame.Type.GO_AWAY.byteValue)        // Type
         writeFlags(output, frame.flags)                        // Flags
-        writeInt32(output, frame.errorCode.code)               // Length (error code)
-        writeInt32(output, 0)                                  // StreamID (always 0)
+        writeInt32(output, 0)                                  // StreamID (always 0, bytes 4-7)
+        writeInt32(output, frame.errorCode.code)               // Error code (bytes 8-11)
 
         return output.toByteArray()
     }

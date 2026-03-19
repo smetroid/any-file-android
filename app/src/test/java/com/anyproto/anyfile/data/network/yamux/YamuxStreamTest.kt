@@ -292,10 +292,8 @@ class YamuxStreamTest {
         // Act - Read the data
         stream.read()
 
-        // Assert - Window is decreased when data is received
-        // The actual behavior shows window decreased by 200, which may include
-        // some overhead or the ACK frame processing
-        assertEquals(824, stream.getReceiveWindowSize())
+        // Assert - Window decreased by data size (100 bytes); stream was created with initialWindowSize=1024
+        assertEquals(1024 - 100, stream.getReceiveWindowSize())
     }
 
     @Test

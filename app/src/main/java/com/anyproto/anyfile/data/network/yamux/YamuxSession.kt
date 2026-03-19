@@ -12,9 +12,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.Socket
 import java.net.SocketException
 import java.util.concurrent.locks.ReentrantLock
-import javax.net.ssl.SSLSocket
 import kotlin.concurrent.withLock
 import kotlin.coroutines.CoroutineContext
 
@@ -36,12 +36,12 @@ import kotlin.coroutines.CoroutineContext
  * - Client-initiated streams use odd IDs: 1, 3, 5, 7, ...
  * - Server-initiated streams use even IDs: 2, 4, 6, 8, ...
  *
- * @property socket The underlying TLS socket
+ * @property socket The underlying socket (raw TCP after handshake, per Go any-sync behavior)
  * @property isClient Whether this session acts as a client (true) or server (false)
  * @property scope Coroutine scope for async operations
  */
 class YamuxSession(
-    private val socket: SSLSocket,
+    private val socket: Socket,
     private val isClient: Boolean = true,
     override val coroutineContext: CoroutineContext = SupervisorJob() + Dispatchers.IO
 ) : CoroutineScope {
@@ -86,8 +86,10 @@ class YamuxSession(
          * @return A new YamuxSession wrapping the authenticated socket
          */
         fun fromSecureSession(secureSession: com.anyproto.anyfile.data.network.handshake.SecureSession): YamuxSession {
+            // Use raw TCP socket (not SSLSocket) to match Go any-sync: yamux runs on raw TCP
+            val rawSocket = secureSession.socket.rawSocket ?: secureSession.socket.socket
             return YamuxSession(
-                socket = secureSession.socket.socket,
+                socket = rawSocket,
                 isClient = true
             )
         }
@@ -479,6 +481,10 @@ class YamuxSession(
 
     /**
      * Handle a WINDOW_UPDATE frame.
+     *
+     * Go's yamux server (hashicorp/yamux) acknowledges a client SYN by sending
+     * typeWindowUpdate|flagACK, NOT typeData|flagACK. We must detect this and
+     * transition the stream from SYN_SENT → OPEN so waitForOpen() unblocks.
      */
     private suspend fun handleWindowUpdateFrame(frame: YamuxFrame.WindowUpdate) {
         val streamId = frame.streamId
@@ -488,7 +494,13 @@ class YamuxSession(
             return
         }
 
-        lock.withLock { streamsMap[streamId] }?.handleWindowUpdate(frame.delta)
+        val stream = lock.withLock { streamsMap[streamId] } ?: return
+        if (frame.flags.contains(YamuxFrame.Flag.ACK)) {
+            // SYN-ACK: transition stream SYN_SENT → OPEN
+            stream.handleWindowUpdateAck(frame.delta)
+        } else {
+            stream.handleWindowUpdate(frame.delta)
+        }
     }
 
     /**
