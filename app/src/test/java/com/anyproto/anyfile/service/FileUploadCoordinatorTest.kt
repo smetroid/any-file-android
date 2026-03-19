@@ -1,53 +1,78 @@
 package com.anyproto.anyfile.service
 
-import com.anyproto.anyfile.domain.sync.FileUploadResult
-import com.anyproto.anyfile.domain.sync.SyncOrchestrator
+import com.anyproto.anyfile.data.config.NetworkConfigRepository
+import com.anyproto.anyfile.data.network.Base58Btc
+import com.anyproto.anyfile.data.network.CidUtils
+import com.anyproto.anyfile.data.network.model.BlockPushResult
+import com.anyproto.anyfile.data.network.p2p.P2PFilenodeClient
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
+import java.io.File
 
 class FileUploadCoordinatorTest {
 
-    private val mockOrchestrator: SyncOrchestrator = mockk()
-    private val coordinator = FileUploadCoordinator(mockOrchestrator)
+    private val mockFilenodeClient: P2PFilenodeClient = mockk(relaxed = true)
+    private val mockConfig: NetworkConfigRepository = mockk(relaxed = true)
+    private val coordinator = FileUploadCoordinator(mockFilenodeClient, mockConfig)
 
     @Test
-    fun `upload delegates to SyncOrchestrator with default-space and given path`() = runTest {
-        coEvery { mockOrchestrator.uploadFile(any(), any()) } returns
-            FileUploadResult.Success("file-id", "abc123", 256, 1)
+    fun `upload skips when no space ID configured`() = runTest {
+        every { mockConfig.spaceId } returns null
 
-        coordinator.upload("/sdcard/AnyFileSync/test.txt")
+        coordinator.upload("/any/path/file.txt")
 
-        coVerify(exactly = 1) {
-            mockOrchestrator.uploadFile("default-space", "/sdcard/AnyFileSync/test.txt")
-        }
+        coVerify(exactly = 0) { mockFilenodeClient.blockPush(any(), any(), any(), any()) }
     }
 
     @Test
-    fun `upload with different path calls orchestrator with that path`() = runTest {
-        coEvery { mockOrchestrator.uploadFile(any(), any()) } returns
-            FileUploadResult.Success("file-id-2", "def456", 512, 2)
+    fun `upload calls blockPush with base58 CID as fileId`() = runTest {
+        val tempFile = File.createTempFile("anyfile_test", ".txt")
+        val content = "hello world"
+        tempFile.writeText(content)
 
-        coordinator.upload("/data/user/0/com.anyproto.anyfile/files/doc.pdf")
+        val expectedCid = CidUtils.computeBlake3Cid(content.toByteArray())
+        val expectedFileId = "${tempFile.name}|${Base58Btc.encode(expectedCid)}"
+
+        every { mockConfig.spaceId } returns "my-space-id"
+        coEvery { mockFilenodeClient.blockPush(any(), any(), any(), any()) } returns
+            Result.success(BlockPushResult(true))
+
+        coordinator.upload(tempFile.absolutePath)
 
         coVerify(exactly = 1) {
-            mockOrchestrator.uploadFile(
-                "default-space",
-                "/data/user/0/com.anyproto.anyfile/files/doc.pdf"
+            mockFilenodeClient.blockPush(
+                spaceId = "my-space-id",
+                fileId = expectedFileId,
+                cid = expectedCid,
+                data = any(),
             )
         }
+        tempFile.delete()
     }
 
     @Test
-    fun `upload does not throw when orchestrator throws`() = runTest {
-        coEvery { mockOrchestrator.uploadFile(any(), any()) } throws
-            RuntimeException("network unavailable")
+    fun `upload does not throw when file does not exist`() = runTest {
+        every { mockConfig.spaceId } returns "my-space-id"
 
-        // Should not propagate — SyncService must keep running
-        coordinator.upload("/sdcard/AnyFileSync/file.txt")
+        coordinator.upload("/nonexistent/path/file.txt")
+        // exception caught internally — should not propagate
+    }
 
-        coVerify(exactly = 1) { mockOrchestrator.uploadFile(any(), any()) }
+    @Test
+    fun `upload does not throw when blockPush fails`() = runTest {
+        val tempFile = File.createTempFile("anyfile_test2", ".txt")
+        tempFile.writeText("data")
+
+        every { mockConfig.spaceId } returns "my-space-id"
+        coEvery { mockFilenodeClient.blockPush(any(), any(), any(), any()) } returns
+            Result.failure(RuntimeException("network error"))
+
+        coordinator.upload(tempFile.absolutePath)
+        // should not propagate
+        tempFile.delete()
     }
 }

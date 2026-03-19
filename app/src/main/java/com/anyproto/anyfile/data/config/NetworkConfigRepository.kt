@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.URL
+import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -28,6 +29,8 @@ class NetworkConfigRepository @Inject constructor(
         private const val CONFIG_FILE_NAME = "network.yml"
         private const val PREFS_NAME = "network_config_prefs"
         private const val KEY_SYNC_FOLDER = "sync_folder_path"
+        private const val KEY_SPACE_ID = "space_id"
+        private const val KEY_CID_PREFIX = "cid_"
         private const val MAX_CONFIG_SIZE = 1 * 1024 * 1024 // 1 MB
         private const val TIMEOUT_MS = 30_000
     }
@@ -47,6 +50,31 @@ class NetworkConfigRepository @Inject constructor(
         set(value) {
             prefs.edit().putString(KEY_SYNC_FOLDER, value).apply()
         }
+
+    /**
+     * Space ID for file sync, stored in SharedPreferences.
+     */
+    var spaceId: String?
+        get() = prefs.getString(KEY_SPACE_ID, null)
+        set(value) {
+            prefs.edit().putString(KEY_SPACE_ID, value).apply()
+        }
+
+    /**
+     * Returns the CID bytes for a file that was uploaded from this device, or null if unknown.
+     */
+    fun getCidForFile(fileId: String): ByteArray? {
+        val base64 = prefs.getString("$KEY_CID_PREFIX$fileId", null) ?: return null
+        return Base64.getDecoder().decode(base64)
+    }
+
+    /**
+     * Stores the CID bytes for an uploaded file so it can be retrieved for download.
+     */
+    fun setCidForFile(fileId: String, cid: ByteArray) {
+        val base64 = Base64.getEncoder().encodeToString(cid)
+        prefs.edit().putString("$KEY_CID_PREFIX$fileId", base64).apply()
+    }
 
     /**
      * Fetch config bytes from a local file path or an https:// URL.
@@ -152,14 +180,10 @@ class NetworkConfigRepository @Inject constructor(
     }
 
     // -------------------------------------------------------------------------
-    // Manual YAML parser for the any-sync network.yml format:
-    //
-    // nodes:
-    //   - peerId: 12D3KooW...
-    //     addresses:
-    //       - host:port
-    //     types:
-    //       - coordinator  (or: fileNode, consensusNode, tree)
+    // Manual YAML parser for the any-sync network.yml / client.yml format.
+    // Supports both orderings:
+    //   - peerId-first:   - peerId: 12D3KooW...
+    //   - addresses-first: - addresses: [...], peerId: ..., types: [...]
     // -------------------------------------------------------------------------
 
     private data class NodeEntry(
@@ -206,8 +230,12 @@ class NetworkConfigRepository @Inject constructor(
                     currentPeerId = trimmed.removePrefix("- peerId:").trim()
                 }
                 inNodes && trimmed.startsWith("peerId:") -> {
-                    flushNode()
+                    if (currentPeerId.isNotEmpty()) flushNode()
                     currentPeerId = trimmed.removePrefix("peerId:").trim()
+                }
+                inNodes && trimmed.startsWith("- addresses:") -> {
+                    flushNode()
+                    section = "addresses"
                 }
                 inNodes && trimmed.startsWith("addresses:") -> {
                     section = "addresses"
@@ -215,7 +243,7 @@ class NetworkConfigRepository @Inject constructor(
                 inNodes && trimmed.startsWith("types:") -> {
                     section = "types"
                 }
-                inNodes && trimmed.startsWith("- ") && currentPeerId.isNotEmpty() -> {
+                inNodes && trimmed.startsWith("- ") && section.isNotEmpty() -> {
                     val value = trimmed.removePrefix("- ").trim()
                     when (section) {
                         "addresses" -> currentAddresses.add(value)

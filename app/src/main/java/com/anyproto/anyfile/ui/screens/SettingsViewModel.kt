@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.anyproto.anyfile.data.config.NetworkConfigRepository
 import com.anyproto.anyfile.util.ErrorHandler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -30,7 +31,8 @@ sealed class SettingsUpdateResult {
  */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val networkConfigRepository: NetworkConfigRepository,
 ) : ViewModel() {
 
     private val prefs: SharedPreferences = context.getSharedPreferences(
@@ -44,6 +46,7 @@ class SettingsViewModel @Inject constructor(
             syncInterval = prefs.getString(KEY_SYNC_INTERVAL, "Manual") ?: "Manual",
             debugLoggingEnabled = prefs.getBoolean(KEY_DEBUG_LOGGING, false),
             verboseSyncStatus = prefs.getBoolean(KEY_VERBOSE_SYNC, false),
+            spaceId = networkConfigRepository.spaceId ?: "",
             appVersion = getAppVersion(),
             isDebugBuild = isDebugBuild()
         )
@@ -113,16 +116,32 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
+     * Update space ID (stored in NetworkConfigRepository for SyncService to pick up)
+     */
+    fun updateSpaceId(value: String): SettingsUpdateResult {
+        return try {
+            networkConfigRepository.spaceId = value.takeIf { it.isNotBlank() }
+            _uiState.value = _uiState.value.copy(spaceId = value)
+            SettingsUpdateResult.Success
+        } catch (e: Exception) {
+            handleError(e, "updateSpaceId")
+            SettingsUpdateResult.Error("Failed to save space ID")
+        }
+    }
+
+    /**
      * Clear all settings
      */
     fun clearAllSettings(): SettingsUpdateResult {
         return try {
             prefs.edit().clear().apply()
+            networkConfigRepository.spaceId = null
             _uiState.value = SettingsUiState(
                 coordinatorUrl = "",
                 syncInterval = "Manual",
                 debugLoggingEnabled = false,
                 verboseSyncStatus = false,
+                spaceId = "",
                 appVersion = getAppVersion(),
                 isDebugBuild = isDebugBuild()
             )

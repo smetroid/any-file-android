@@ -1,28 +1,44 @@
 package com.anyproto.anyfile.service
 
 import android.util.Log
-import com.anyproto.anyfile.domain.sync.SyncOrchestrator
+import com.anyproto.anyfile.data.config.NetworkConfigRepository
+import com.anyproto.anyfile.data.network.Base58Btc
+import com.anyproto.anyfile.data.network.CidUtils
+import com.anyproto.anyfile.data.network.p2p.P2PFilenodeClient
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Delegates file upload events from [SyncService]'s file watcher to [SyncOrchestrator].
+ * Handles file upload events from [SyncService]'s file watcher.
  *
- * Uses a hardcoded space ID ("default-space") until space management is wired from config/Room.
+ * Reads each file, computes its blake3 CID, and pushes it to the filenode
+ * via [P2PFilenodeClient]. Requires [NetworkConfigRepository.spaceId] to be set.
  */
 @Singleton
 class FileUploadCoordinator @Inject constructor(
-    private val syncOrchestrator: SyncOrchestrator,
+    private val filenodeClient: P2PFilenodeClient,
+    private val config: NetworkConfigRepository,
 ) {
     companion object {
         private const val TAG = "FileUploadCoordinator"
-        const val DEFAULT_SPACE_ID = "default-space"
     }
 
     suspend fun upload(path: String) {
+        val spaceId = config.spaceId ?: run {
+            Log.d(TAG, "No space ID configured, skipping upload for $path")
+            return
+        }
         try {
-            val result = syncOrchestrator.uploadFile(DEFAULT_SPACE_ID, path)
-            Log.d(TAG, "Uploaded $path: $result")
+            val data = File(path).readBytes()
+            val cid = CidUtils.computeBlake3Cid(data)
+            // fileId = "relPath|base58btc(CID bytes)" — matches Go's buildFileID convention
+            val fileId = "${File(path).name}|${Base58Btc.encode(cid)}"
+            filenodeClient.blockPush(spaceId, fileId, cid, data)
+                .onSuccess {
+                    Log.d(TAG, "Uploaded $fileId (${File(path).name}) to space $spaceId")
+                }
+                .onFailure { Log.e(TAG, "Upload failed for $fileId: ${it.message}") }
         } catch (e: Exception) {
             Log.e(TAG, "Upload failed for $path: ${e.message}")
         }

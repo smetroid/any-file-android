@@ -2,11 +2,11 @@ package com.anyproto.anyfile.data.network.p2p
 
 import com.anyproto.anyfile.data.network.drpc.DrpcClient
 import com.anyproto.anyfile.data.network.drpc.filenodeCall
+import com.anyproto.anyfile.data.network.drpc.filenodeStreamingCall
 import com.anyproto.anyfile.data.network.model.AccountInfo
 import com.anyproto.anyfile.data.network.model.BlockGetResult
 import com.anyproto.anyfile.data.network.model.BlockPushResult
 import com.anyproto.anyfile.data.network.model.FileInfo
-import com.anyproto.anyfile.data.network.model.FilesGetResult
 import com.anyproto.anyfile.data.network.model.FilesInfoResult
 import com.anyproto.anyfile.data.network.model.SpaceUsageInfo
 import com.anyproto.anyfile.data.network.yamux.YamuxConnectionManager
@@ -167,40 +167,26 @@ class P2PFilenodeClient @Inject constructor(
     }
 
     /**
-     * Get file data for multiple files.
-     *
-     * Note: FilesGet returns a stream in the proto, but DRPC doesn't support
-     * streaming responses. This implementation makes multiple calls to get
-     * all file IDs.
+     * List all file IDs in the space by consuming the server-streaming FilesGet RPC.
      *
      * @param spaceId The ID of the space
-     * @param fileIds List of file IDs to get
-     * @return List of FilesGetResult containing the file IDs
+     * @return List of file IDs present in the space
      */
-    suspend fun filesGet(
-        spaceId: String,
-        fileIds: List<String>,
-    ): Result<List<FilesGetResult>> = withContext(Dispatchers.IO) {
+    suspend fun filesGet(spaceId: String): Result<List<String>> = withContext(Dispatchers.IO) {
         try {
             ensureInitialized()
 
-            val results = mutableListOf<FilesGetResult>()
+            val requestProto = FilesGetRequest.newBuilder()
+                .setSpaceId(spaceId)
+                .build()
 
-            for (fileId in fileIds) {
-                val requestProto = FilesGetRequest.newBuilder()
-                    .setSpaceId(spaceId)
-                    .build()
+            val responses = callRpcStreaming(
+                method = "FilesGet",
+                request = requestProto,
+                responseParser = FilesGetResponse.parser(),
+            )
 
-                val response = callRpc(
-                    method = "FilesGet",
-                    request = requestProto,
-                    responseParser = FilesGetResponse.parser()
-                )
-
-                results.add(FilesGetResult(response.fileId))
-            }
-
-            Result.success(results)
+            Result.success(responses.map { it.fileId }.filter { it.isNotEmpty() })
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -262,6 +248,15 @@ class P2PFilenodeClient @Inject constructor(
         if (filenodeHost == null || filenodePort == null) {
             throw IllegalStateException("P2PFilenodeClient not initialized. Call initialize(host, port) first.")
         }
+    }
+
+    private suspend fun <T : com.google.protobuf.MessageLite> callRpcStreaming(
+        method: String,
+        request: com.google.protobuf.MessageLite,
+        responseParser: com.google.protobuf.Parser<T>,
+    ): List<T> {
+        val session: YamuxSession = connectionManager.getSession(filenodeHost!!, filenodePort!!)
+        return DrpcClient(session).filenodeStreamingCall(method, request, responseParser)
     }
 
     /**

@@ -3,6 +3,7 @@ package com.anyproto.anyfile.ui.screens
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.anyproto.anyfile.data.config.NetworkConfigRepository
 import io.mockk.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -31,6 +32,7 @@ class SettingsViewModelTest {
     private lateinit var mockContext: Context
     private lateinit var mockSharedPreferences: SharedPreferences
     private lateinit var mockEditor: SharedPreferences.Editor
+    private lateinit var mockNetworkConfigRepository: NetworkConfigRepository
     private val testDispatcher = UnconfinedTestDispatcher()
 
     @Before
@@ -40,6 +42,10 @@ class SettingsViewModelTest {
         mockContext = mockk()
         mockSharedPreferences = mockk()
         mockEditor = mockk()
+        mockNetworkConfigRepository = mockk(relaxed = true)
+
+        // Mock NetworkConfigRepository
+        every { mockNetworkConfigRepository.spaceId } returns null
 
         // Mock SharedPreferences behavior
         every { mockContext.getSharedPreferences("anyfile_settings", Context.MODE_PRIVATE) } returns mockSharedPreferences
@@ -66,7 +72,7 @@ class SettingsViewModelTest {
         every { mockContext.packageName } returns "com.anyproto.anyfile"
         every { mockPackageManager.getPackageInfo("com.anyproto.anyfile", 0) } returns mockPackageInfo
 
-        viewModel = SettingsViewModel(mockContext)
+        viewModel = SettingsViewModel(mockContext, mockNetworkConfigRepository)
     }
 
     @After
@@ -92,7 +98,7 @@ class SettingsViewModelTest {
         every { mockSharedPreferences.getString("coordinator_url", "") } returns "https://example.com"
 
         // Act
-        val testViewModel = SettingsViewModel(mockContext)
+        val testViewModel = SettingsViewModel(mockContext, mockNetworkConfigRepository)
 
         // Assert
         assertThat(testViewModel.uiState.value.coordinatorUrl).isEqualTo("https://example.com")
@@ -104,7 +110,7 @@ class SettingsViewModelTest {
         every { mockSharedPreferences.getString("sync_interval", "Manual") } returns "15 minutes"
 
         // Act
-        val testViewModel = SettingsViewModel(mockContext)
+        val testViewModel = SettingsViewModel(mockContext, mockNetworkConfigRepository)
 
         // Assert
         assertThat(testViewModel.uiState.value.syncInterval).isEqualTo("15 minutes")
@@ -116,7 +122,7 @@ class SettingsViewModelTest {
         every { mockSharedPreferences.getBoolean("debug_logging", false) } returns true
 
         // Act
-        val testViewModel = SettingsViewModel(mockContext)
+        val testViewModel = SettingsViewModel(mockContext, mockNetworkConfigRepository)
 
         // Assert
         assertThat(testViewModel.uiState.value.debugLoggingEnabled).isTrue()
@@ -128,7 +134,7 @@ class SettingsViewModelTest {
         every { mockSharedPreferences.getBoolean("verbose_sync", false) } returns true
 
         // Act
-        val testViewModel = SettingsViewModel(mockContext)
+        val testViewModel = SettingsViewModel(mockContext, mockNetworkConfigRepository)
 
         // Assert
         assertThat(testViewModel.uiState.value.verboseSyncStatus).isTrue()
@@ -174,7 +180,7 @@ class SettingsViewModelTest {
     fun `toggleDebugLogging disables debug logging`() {
         // Arrange - Start with enabled
         every { mockSharedPreferences.getBoolean("debug_logging", false) } returns true
-        val testViewModel = SettingsViewModel(mockContext)
+        val testViewModel = SettingsViewModel(mockContext, mockNetworkConfigRepository)
         every { mockEditor.putBoolean(any(), any()) } returns mockEditor
 
         // Act
@@ -203,7 +209,7 @@ class SettingsViewModelTest {
     fun `toggleVerboseSyncStatus disables verbose sync status`() {
         // Arrange - Start with enabled
         every { mockSharedPreferences.getBoolean("verbose_sync", false) } returns true
-        val testViewModel = SettingsViewModel(mockContext)
+        val testViewModel = SettingsViewModel(mockContext, mockNetworkConfigRepository)
         every { mockEditor.putBoolean(any(), any()) } returns mockEditor
 
         // Act
@@ -248,7 +254,7 @@ class SettingsViewModelTest {
         every { mockPackageManager.getPackageInfo("com.anyproto.anyfile", 0) } returns mockPackageInfo
 
         // Act
-        val testViewModel = SettingsViewModel(mockContext)
+        val testViewModel = SettingsViewModel(mockContext, mockNetworkConfigRepository)
 
         // Assert
         assertThat(testViewModel.uiState.value.isDebugBuild).isTrue()

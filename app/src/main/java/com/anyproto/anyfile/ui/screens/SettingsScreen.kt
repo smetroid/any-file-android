@@ -15,6 +15,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.anyproto.anyfile.util.ErrorHandler
 import kotlinx.coroutines.launch
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 
 /**
  * Settings screen for app configuration
@@ -105,6 +109,34 @@ fun SettingsScreen(
                                 }
                                 showDialog = false
                             }
+                        )
+                    }
+                }
+
+                // Space ID field — inline text entry backed by NetworkConfigRepository
+                run {
+                    val focusManager = LocalFocusManager.current
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = uiState.spaceId,
+                            onValueChange = { viewModel.updateSpaceId(it) },
+                            label = { Text("Space ID") },
+                            placeholder = { Text("Paste space UUID here") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         )
                     }
                 }
@@ -410,6 +442,7 @@ data class SettingsUiState(
     val syncInterval: String = "Manual",
     val debugLoggingEnabled: Boolean = false,
     val verboseSyncStatus: Boolean = false,
+    val spaceId: String = "",
     val appVersion: String = "0.1.0",
     val isDebugBuild: Boolean = false
 )

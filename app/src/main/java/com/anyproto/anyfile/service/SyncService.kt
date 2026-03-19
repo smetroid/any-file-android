@@ -8,15 +8,17 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.anyproto.anyfile.data.config.NetworkConfigRepository
+import com.anyproto.anyfile.data.network.Base58Btc
 import com.anyproto.anyfile.data.network.SyncClient
-import com.anyproto.anyfile.data.network.p2p.P2PFilenodeClient
 import com.anyproto.anyfile.domain.watch.FileChangeListener
 import com.anyproto.anyfile.domain.watch.FileWatcher
 import com.anyproto.anyfile.ui.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
+import java.io.File
 import javax.inject.Inject
 
 /**
@@ -98,23 +100,50 @@ class SyncService : Service() {
 
             val (coordHost, coordPort) = networkConfigRepository.getCoordinatorAddress()
             val (fnHost, fnPort) = networkConfigRepository.getFilenodeAddress()
-            val syncFolder = networkConfigRepository.syncFolderPath
+            val syncDir = File(filesDir, "sync").also { it.mkdirs() }
 
             updateNotification("Connecting...")
             syncClient.connectCoordinator(coordHost, coordPort)
             val fn = syncClient.connectFilenode(fnHost, fnPort)
 
             updateNotification("Syncing")
+            startFileWatcher(syncDir.absolutePath)
 
-            if (syncFolder != null && syncFolder.startsWith("/")) {
-                startFileWatcher(syncFolder, fn)
-            }
-
+            val localFileIds = mutableSetOf<String>()
             while (serviceScope.isActive) {
                 try {
-                    // Download poll cycle — stub for future implementation
+                    val spaceId = networkConfigRepository.spaceId
+                    if (spaceId != null) {
+                        val remoteIds = fn.filesGet(spaceId).getOrNull() ?: emptyList()
+                        for (fileId in remoteIds) {
+                            if (fileId !in localFileIds) {
+                                // fileId = "relPath|base58btc(CID)" — Go's buildFileID convention
+                                val pipeIdx = fileId.lastIndexOf('|')
+                                if (pipeIdx < 0) {
+                                    Log.w(TAG, "Remote file $fileId missing '|' separator, skipping")
+                                    localFileIds += fileId
+                                    continue
+                                }
+                                val relPath = fileId.substring(0, pipeIdx)
+                                val base58Cid = fileId.substring(pipeIdx + 1)
+                                val cid = try {
+                                    Base58Btc.decode(base58Cid)
+                                } catch (e: IllegalArgumentException) {
+                                    Log.w(TAG, "Remote file $fileId has non-base58 CID, skipping")
+                                    localFileIds += fileId
+                                    continue
+                                }
+                                val result = fn.blockGet(spaceId, cid).getOrNull()
+                                if (result != null) {
+                                    File(syncDir, relPath).apply { parentFile?.mkdirs() }.writeBytes(result.data)
+                                    localFileIds += fileId
+                                    Log.d(TAG, "Downloaded $relPath (fileId=$fileId)")
+                                }
+                            }
+                        }
+                    }
                 } catch (e: Exception) {
-                    // log and continue
+                    Log.e(TAG, "Poll error: ${e.message}")
                 }
                 delay(POLL_INTERVAL_MS)
             }
@@ -125,7 +154,7 @@ class SyncService : Service() {
         }
     }
 
-    private fun startFileWatcher(syncFolderPath: String, fn: P2PFilenodeClient) {
+    private fun startFileWatcher(syncFolderPath: String) {
         try {
             fileWatcher = FileWatcher(syncFolderPath)
             fileWatcher?.setListener(object : FileChangeListener {

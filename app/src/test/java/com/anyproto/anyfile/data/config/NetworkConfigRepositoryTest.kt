@@ -101,6 +101,28 @@ class NetworkConfigRepositoryTest {
         assertEquals(1004, port)
     }
 
+    @Test
+    fun `isConfigured returns true for addresses-first yaml format`() {
+        repo.save(ADDRESSES_FIRST_NETWORK_YML.toByteArray())
+        assertTrue(repo.isConfigured())
+    }
+
+    @Test
+    fun `getCoordinatorAddress works with addresses-first yaml format`() {
+        repo.save(ADDRESSES_FIRST_NETWORK_YML.toByteArray())
+        val (host, port) = repo.getCoordinatorAddress()
+        assertEquals("192.168.1.1", host)
+        assertEquals(1004, port)
+    }
+
+    @Test
+    fun `getFilenodeAddress works with addresses-first yaml format`() {
+        repo.save(ADDRESSES_FIRST_NETWORK_YML.toByteArray())
+        val (host, port) = repo.getFilenodeAddress()
+        assertEquals("192.168.1.1", host)
+        assertEquals(1005, port)
+    }
+
     companion object {
         val VALID_CONFIG_YAML = """
 nodes:
@@ -142,6 +164,27 @@ nodes:
       - quic://any-sync-filenode:1015
       - 127.0.0.1:1005
       - quic://127.0.0.1:1015
+    types:
+      - file
+""".trimIndent()
+
+        // Actual any-sync client.yml format: addresses come BEFORE peerId
+        val ADDRESSES_FIRST_NETWORK_YML = """
+nodes:
+  - addresses:
+      - any-sync-coordinator:1004
+      - quic://any-sync-coordinator:1014
+      - 192.168.1.1:1004
+      - quic://192.168.1.1:1014
+    peerId: 12D3KooWJEj
+    types:
+      - coordinator
+  - addresses:
+      - any-sync-filenode:1005
+      - quic://any-sync-filenode:1015
+      - 192.168.1.1:1005
+      - quic://192.168.1.1:1015
+    peerId: 12D3KooWH9r
     types:
       - file
 """.trimIndent()
