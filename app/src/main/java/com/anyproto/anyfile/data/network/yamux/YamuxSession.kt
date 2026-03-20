@@ -594,13 +594,13 @@ class YamuxSession(
 
     private inner class LoggingOutputStream(private val delegate: OutputStream) : OutputStream() {
         override fun write(b: Int) {
-            Log.v(TAG, "WIRE_OUT hex=%02x".format(b))
             delegate.write(b)
+            Log.v(TAG, "WIRE_OUT hex=%02x".format(b))
         }
 
         override fun write(buf: ByteArray, off: Int, len: Int) {
-            logChunked("WIRE_OUT", buf, off, len)
             delegate.write(buf, off, len)
+            logChunked("WIRE_OUT", buf, off, len)
         }
 
         override fun flush() = delegate.flush()
