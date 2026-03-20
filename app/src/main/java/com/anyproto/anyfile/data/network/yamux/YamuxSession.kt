@@ -86,7 +86,8 @@ class YamuxSession(
          * @return A new YamuxSession wrapping the authenticated socket
          */
         fun fromSecureSession(secureSession: com.anyproto.anyfile.data.network.handshake.SecureSession): YamuxSession {
-            // Use raw TCP socket (not SSLSocket) to match Go any-sync: yamux runs on raw TCP
+            // Use raw TCP socket for yamux — Go any-sync drops TLS after credential
+            // exchange and runs yamux on the underlying raw TCP conn (not SSLSocket).
             val rawSocket = secureSession.socket.rawSocket ?: secureSession.socket.socket
             return YamuxSession(
                 socket = rawSocket,
@@ -119,8 +120,8 @@ class YamuxSession(
     private val pendingStreamsChannel = Channel<YamuxStream>(capacity = Channel.UNLIMITED)
 
     // I/O streams
-    private val inputStream: InputStream = socket.getInputStream()
-    private val outputStream: OutputStream = socket.getOutputStream()
+    private val inputStream: InputStream = LoggingInputStream(socket.getInputStream())
+    private val outputStream: OutputStream = LoggingOutputStream(socket.getOutputStream())
 
     // Frame reading job
     private var frameReaderJob: Job? = null
@@ -415,6 +416,13 @@ class YamuxSession(
      * @param frame The frame to handle
      */
     private suspend fun handleFrame(frame: YamuxFrame) {
+        // Debug: log all received yamux frames
+        when (frame) {
+            is YamuxFrame.Data -> android.util.Log.d(TAG, "RECV DATA sid=${frame.streamId} flags=${frame.flags} len=${frame.data.size} hex=${frame.data.take(16).joinToString("") { "%02x".format(it) }}")
+            is YamuxFrame.WindowUpdate -> android.util.Log.d(TAG, "RECV WINUPDATE sid=${frame.streamId} flags=${frame.flags} delta=${frame.delta}")
+            is YamuxFrame.Ping -> android.util.Log.d(TAG, "RECV PING flags=${frame.flags} val=${frame.value}")
+            is YamuxFrame.GoAway -> android.util.Log.d(TAG, "RECV GOAWAY code=${frame.errorCode}")
+        }
         when (frame) {
             is YamuxFrame.Data -> handleDataFrame(frame)
             is YamuxFrame.WindowUpdate -> handleWindowUpdateFrame(frame)
@@ -495,10 +503,19 @@ class YamuxSession(
         }
 
         val stream = lock.withLock { streamsMap[streamId] } ?: return
+
+        // hashicorp/yamux sends WINDOW_UPDATE|flagFIN to half-close a stream.
+        // Synthesize a DATA|FIN frame to reuse the existing FIN handling in YamuxStream
+        // which closes the dataChannel and causes stream.read() to return null (EOF).
+        if (frame.flags.contains(YamuxFrame.Flag.FIN)) {
+            stream.handleDataFrame(YamuxFrame.Data(streamId, setOf(YamuxFrame.Flag.FIN), ByteArray(0)))
+        }
+
         if (frame.flags.contains(YamuxFrame.Flag.ACK)) {
             // SYN-ACK: transition stream SYN_SENT → OPEN
             stream.handleWindowUpdateAck(frame.delta)
-        } else {
+        } else if (!frame.flags.contains(YamuxFrame.Flag.FIN)) {
+            // Pure window update (not FIN — FIN delta is always 0 and should not update the window)
             stream.handleWindowUpdate(frame.delta)
         }
     }
@@ -554,6 +571,56 @@ class YamuxSession(
      */
     private fun generatePingId(): Int {
         return (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
+    }
+
+    // ── Wire-level logging (remove after root-cause is identified) ─────────────
+
+    private inner class LoggingInputStream(private val delegate: InputStream) : InputStream() {
+        override fun read(): Int {
+            val b = delegate.read()
+            if (b != -1) Log.v(TAG, "WIRE_IN hex=%02x".format(b))
+            return b
+        }
+
+        override fun read(buf: ByteArray, off: Int, len: Int): Int {
+            val n = delegate.read(buf, off, len)
+            if (n > 0) logChunked("WIRE_IN", buf, off, n)
+            return n
+        }
+
+        override fun available(): Int = delegate.available()
+        override fun close() = delegate.close()
+    }
+
+    private inner class LoggingOutputStream(private val delegate: OutputStream) : OutputStream() {
+        override fun write(b: Int) {
+            Log.v(TAG, "WIRE_OUT hex=%02x".format(b))
+            delegate.write(b)
+        }
+
+        override fun write(buf: ByteArray, off: Int, len: Int) {
+            logChunked("WIRE_OUT", buf, off, len)
+            delegate.write(buf, off, len)
+        }
+
+        override fun flush() = delegate.flush()
+        override fun close() = delegate.close()
+    }
+
+    /**
+     * Log [len] bytes from [buf] starting at [off], chunked to ≤64 bytes per line
+     * to stay within logcat's line limit.
+     */
+    private fun logChunked(tag: String, buf: ByteArray, off: Int, len: Int) {
+        val chunkSize = 64
+        var pos = off
+        val end = off + len
+        while (pos < end) {
+            val count = minOf(chunkSize, end - pos)
+            val hex = buf.copyOfRange(pos, pos + count).joinToString("") { "%02x".format(it) }
+            Log.v(TAG, "$tag hex=$hex")
+            pos += count
+        }
     }
 }
 
