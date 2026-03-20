@@ -87,8 +87,9 @@ class DrpcClientTest {
         val responseBytes = expectedResponse.toByteArray()
         val framedResponse = DrpcWireFrame(DrpcWireKind.Message, 1L, 1L, true, responseBytes).encode()
 
-        // Mock read to return response data then null (stream closed)
-        coEvery { mockStream.read(any()) } returnsMany listOf(framedResponse, null)
+        // Mock read: first return ProtoHandshake Ack, then response data, then null (stream closed)
+        val ackBytes = byteArrayOf(0x02, 0x00, 0x00, 0x00, 0x00)
+        coEvery { mockStream.read(any()) } returnsMany listOf(ackBytes, framedResponse, null)
         every { mockStream.state } returns YamuxStream.State.CLOSED
 
         // Execute call
@@ -131,7 +132,8 @@ class DrpcClientTest {
         val errorData = codeBytes + errorMsg.toByteArray(Charsets.UTF_8)
         val framedResponse = DrpcWireFrame(DrpcWireKind.Error, 1L, 1L, true, errorData).encode()
 
-        coEvery { mockStream.read(any()) } returnsMany listOf(framedResponse, null)
+        val ackBytes2 = byteArrayOf(0x02, 0x00, 0x00, 0x00, 0x00)
+        coEvery { mockStream.read(any()) } returnsMany listOf(ackBytes2, framedResponse, null)
         every { mockStream.state } returns YamuxStream.State.CLOSED
 
         // Execute and verify exception
@@ -166,7 +168,8 @@ class DrpcClientTest {
         coEvery { relaxedStream.write(any()) } just Runs
         coEvery { relaxedStream.closeWrite() } just Runs
         coEvery { relaxedStream.close() } just Runs
-        coEvery { relaxedStream.read(any()) } throws YamuxStreamException("timeout")
+        // First read: ProtoHandshake Ack; subsequent reads: timeout exception
+        coEvery { relaxedStream.read(any()) } returnsMany listOf(byteArrayOf(0x02, 0x00, 0x00, 0x00, 0x00)) andThenThrows YamuxStreamException("timeout")
 
         // We need to also mock the state
         every { relaxedStream.state } returns YamuxStream.State.OPEN
@@ -228,7 +231,8 @@ class DrpcClientTest {
         val responseBytes = expectedResponse.toByteArray()
         val framedResponse = DrpcWireFrame(DrpcWireKind.Message, 1L, 1L, true, responseBytes).encode()
 
-        coEvery { mockStream.read(any()) } returnsMany listOf(framedResponse, null)
+        val ackBytes3 = byteArrayOf(0x02, 0x00, 0x00, 0x00, 0x00)
+        coEvery { mockStream.read(any()) } returnsMany listOf(ackBytes3, framedResponse, null)
         every { mockStream.state } returns YamuxStream.State.CLOSED
 
         val actualResponse = drpcClient.coordinatorCall(
