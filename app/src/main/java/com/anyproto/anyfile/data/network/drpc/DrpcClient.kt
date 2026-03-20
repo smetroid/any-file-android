@@ -130,6 +130,9 @@ class DrpcClient @Inject constructor(
                 stream.waitForOpen()
                 Log.d(TAG, "Stream is OPEN, ready to send data")
 
+                // Perform per-stream protocol handshake (required by any-sync before DRPC)
+                performStreamHandshake(stream)
+
                 // Send the request
                 Log.d(TAG, "Sending DRPC request...")
                 sendRequest(stream, service, method, request)
@@ -161,6 +164,68 @@ class DrpcClient @Inject constructor(
                 } catch (e: Exception) {
                     // Ignore close errors
                 }
+            }
+        }
+    }
+
+    /**
+     * Perform the any-sync per-stream protocol handshake before DRPC.
+     *
+     * The Go any-sync server calls handshake.IncomingProtoHandshake on every
+     * accepted yamux stream BEFORE reading any DRPC frames. This negotiates
+     * the wire encoding (None vs Snappy).
+     *
+     * We send an empty Proto frame (no encodings offered). Go treats this as
+     * an "old client without encodings support" and responds with Ack{Null},
+     * then uses no compression for DRPC responses.
+     *
+     * Wire format: [type:1][size:4 LE][payload:size]
+     *   msgTypeProto = 0x03, msgTypeAck = 0x02
+     *
+     * Android sends: [03][00 00 00 00] → empty Proto (DRPC, no encodings)
+     * Go responds:   [02][00 00 00 00] → Ack { error: Null }
+     */
+    private suspend fun performStreamHandshake(stream: YamuxStream) {
+        // Send empty Proto frame (no encodings → no Snappy)
+        stream.write(byteArrayOf(0x03, 0x00, 0x00, 0x00, 0x00))
+        Log.d(TAG, "Stream handshake: sent Proto frame")
+
+        // Read server response (Ack or Proto)
+        val response = stream.read(timeoutMs = 5000)
+            ?: throw DrpcConnectionException("Stream closed during proto handshake")
+
+        if (response.size < 5) {
+            throw DrpcConnectionException("Proto handshake response too short: ${response.size}")
+        }
+
+        val msgType = response[0].toInt() and 0xFF
+        val payloadSize = (response[1].toInt() and 0xFF) or
+                         ((response[2].toInt() and 0xFF) shl 8) or
+                         ((response[3].toInt() and 0xFF) shl 16) or
+                         ((response[4].toInt() and 0xFF) shl 24)
+
+        Log.d(TAG, "Stream handshake: response type=0x${msgType.toString(16)} payloadSize=$payloadSize")
+
+        when (msgType) {
+            0x02 -> {
+                // Ack — check for error
+                if (payloadSize > 0 && response.size >= 5 + payloadSize) {
+                    val ack = com.anyproto.anyfile.protos.Ack.parseFrom(
+                        response.copyOfRange(5, 5 + payloadSize)
+                    )
+                    if (ack.error != com.anyproto.anyfile.protos.Error.Null) {
+                        throw DrpcConnectionException("Proto handshake rejected by server: ${ack.error}")
+                    }
+                }
+                Log.d(TAG, "Stream handshake complete: Ack(Null) — no Snappy, ready for DRPC")
+            }
+            0x03 -> {
+                // Proto response — server chose encoding; we sent no encodings so no Snappy
+                Log.d(TAG, "Stream handshake complete: Proto response")
+            }
+            else -> {
+                val hex = response.take(8).joinToString("") { "%02x".format(it) }
+                throw DrpcConnectionException("Unexpected proto handshake response: 0x${msgType.toString(16)} hex=$hex")
             }
         }
     }
@@ -317,6 +382,7 @@ class DrpcClient @Inject constructor(
         try {
             withTimeout(timeoutMs) {
                 stream.waitForOpen()
+                performStreamHandshake(stream)
                 sendRequest(stream, service, method, request)
                 val allData = readAllData(stream)
                 Log.d(TAG, "Streaming rawBytes=${allData.size} hex=${allData.take(64).joinToString("") { "%02x".format(it) }}")

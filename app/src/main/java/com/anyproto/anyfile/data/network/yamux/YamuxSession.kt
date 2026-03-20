@@ -120,8 +120,8 @@ class YamuxSession(
     private val pendingStreamsChannel = Channel<YamuxStream>(capacity = Channel.UNLIMITED)
 
     // I/O streams
-    private val inputStream: InputStream = LoggingInputStream(socket.getInputStream())
-    private val outputStream: OutputStream = LoggingOutputStream(socket.getOutputStream())
+    private val inputStream: InputStream = socket.getInputStream()
+    private val outputStream: OutputStream = socket.getOutputStream()
 
     // Frame reading job
     private var frameReaderJob: Job? = null
@@ -573,55 +573,6 @@ class YamuxSession(
         return (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
     }
 
-    // ── Wire-level logging (remove after root-cause is identified) ─────────────
-
-    private inner class LoggingInputStream(private val delegate: InputStream) : InputStream() {
-        override fun read(): Int {
-            val b = delegate.read()
-            if (b != -1) Log.v(TAG, "WIRE_IN hex=%02x".format(b))
-            return b
-        }
-
-        override fun read(buf: ByteArray, off: Int, len: Int): Int {
-            val n = delegate.read(buf, off, len)
-            if (n > 0) logChunked("WIRE_IN", buf, off, n)
-            return n
-        }
-
-        override fun available(): Int = delegate.available()
-        override fun close() = delegate.close()
-    }
-
-    private inner class LoggingOutputStream(private val delegate: OutputStream) : OutputStream() {
-        override fun write(b: Int) {
-            delegate.write(b)
-            Log.v(TAG, "WIRE_OUT hex=%02x".format(b))
-        }
-
-        override fun write(buf: ByteArray, off: Int, len: Int) {
-            delegate.write(buf, off, len)
-            logChunked("WIRE_OUT", buf, off, len)
-        }
-
-        override fun flush() = delegate.flush()
-        override fun close() = delegate.close()
-    }
-
-    /**
-     * Log [len] bytes from [buf] starting at [off], chunked to ≤64 bytes per line
-     * to stay within logcat's line limit.
-     */
-    private fun logChunked(tag: String, buf: ByteArray, off: Int, len: Int) {
-        val chunkSize = 64
-        var pos = off
-        val end = off + len
-        while (pos < end) {
-            val count = minOf(chunkSize, end - pos)
-            val hex = buf.copyOfRange(pos, pos + count).joinToString("") { "%02x".format(it) }
-            Log.v(TAG, "$tag hex=$hex")
-            pos += count
-        }
-    }
 }
 
 /**
