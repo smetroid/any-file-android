@@ -2,13 +2,34 @@
 
 **Project:** Native Android client for any-file (decentralized file sync using any-sync P2P infrastructure)
 **Start Date:** 2026-02-26
-**Last Updated:** 2026-03-18 (Yamux spec-compliance bugs fixed — raw TCP socket, frame field order, WINDOW_UPDATE+ACK SYN-ACK; all 429 unit tests passing)
+**Last Updated:** 2026-03-20 (ProtoHandshake fix — `filesGet` now returns real file IDs; `go-test.txt` downloaded end-to-end ✅)
 
 ---
 
-## Current Status 🟡 YAMUX FIXED — E2E SMOKE TEST PENDING (2026-03-18)
+## Current Status ✅ END-TO-END SYNC WORKING (2026-03-20)
 
-**P2P stack confirmed working** (2026-03-14). Yamux layer now fully spec-compliant with Go any-sync (2026-03-18). All bidirectional sync code wired. Only manual E2E smoke test remains.
+**Full P2P stack confirmed working.** Android successfully polls `filesGet`, receives Go-uploaded file IDs, and downloads blocks via `blockGet`. `go-test.txt` landed at `/data/data/com.anyproto.anyfile/files/sync/go-test.txt`.
+
+### ProtoHandshake Fix (2026-03-20) — Root Cause of `count=0`
+
+Go's `peer.ServeConn` calls `handshake.IncomingProtoHandshake` on **every accepted yamux stream** before any DRPC traffic. This negotiates wire encoding (None vs Snappy). Android was skipping this step, causing Go to read DRPC Invoke bytes as a handshake header: byte[0]=`0x03` looked like `msgTypeProto`, bytes[1-4] parsed as size=790 MB, which exceeded the 200 KB sizeLimit, triggering `ErrGotUnexpectedMessage`. Go replied with `Ack{Unexpected}` = 7 bytes `02 02 00 00 00 08 01` and closed the stream.
+
+**Fix:** `DrpcClient.performStreamHandshake(stream)` — called after `waitForOpen()` in both `callAsync` and `callStreamingAsync`:
+- Sends `[03][00 00 00 00]` (msgTypeProto=3, size=0, empty Proto = no encodings offered)
+- Reads Go's `[02][00 00 00 00]` Ack(Null) — "old client without encodings, use no Snappy"
+- Then DRPC frames flow without compression
+
+**Commit:** `6f915ae`
+
+### DRPC Bug Fixes (2026-03-19)
+
+### DRPC Bug Fixes (2026-03-19)
+Two additional bugs fixed; `filesGet` no longer times out:
+
+| Bug | Root Cause | Fix |
+|-----|-----------|-----|
+| DRPC invoke path missing leading slash | `val rpcPath = "$service/$method"` produces `filesync.File/FilesGet`; Go DRPC router requires `/filesync.File/FilesGet` | Changed to `"/$service/$method"` in `DrpcClient.kt:185` |
+| `stream.read()` never returned null (FIN ignored) | hashicorp/yamux sends `WINDOW_UPDATE\|FIN` (type=1, flags=4) to half-close a stream; `handleWindowUpdateFrame` only handled ACK flag — FIN was silently dropped, causing `readAllData` to wait forever | When FIN flag present in `handleWindowUpdateFrame`, synthesize a `DATA\|FIN` frame and route to `stream.handleDataFrame()` which closes the `dataChannel` and unblocks `stream.read()` |
 
 ### Yamux/DRPC Bug Fixes (2026-03-18)
 Three bugs prevented DRPC calls from ever completing; all fixed:
@@ -43,6 +64,19 @@ Also: `waitForOpen()` moved inside `withTimeout(30s)` in `DrpcClient` (previous 
 - `filenode.LowClient` interface (`internal/filenode/backend.go`): decouples `SpaceFilenodeClient`, `SpaceSyncService`, `SyncEngine` from transport
 - `anysyncFilenodeAdapter` (`cmd/anyfile/engine.go`): wraps `anysync.FilenodeClient` (PoolClient/TLS+yamux+DRPC); replaces `filenode.Client` (raw TCP, zero timeout — always failed)
 - `nullFilenodeClient`: no-op fallback when infra is unreachable; daemon loads folders in local-only mode
+
+### Open Issue — `filesGet` Returns count=0 (2026-03-19)
+
+After both fixes the FIN is correctly handled (`RECV WINUPDATE sid=1 flags=[FIN] delta=0` in logcat) and the DRPC Invoke hex confirms the leading slash (`2f66696c6573796e632e46696c652f46696c6573476574` = `/filesync.File/FilesGet`). However:
+
+- `filesGet=true count=0` — response received but no files
+- 7-byte response body `02020000000801` — parses as one KindInvoke frame (stream=2, msg=0, done=false, data=0) + 3 unparseable bytes `00 08 01`; this is NOT a valid DRPC Message frame
+- Filenode Docker logs: **zero rpcLog entries** for Android peer `12D3KooWQevGnHXjughQJj1dcivrFGfsVDyH74NhyxAGmaHfUCKC`; filenode IS tracking the peer (GCed after ~1 min)
+- Filenode logs: `"serve connection error: go not a handshake message"` appears at the exact timestamp of Android connection
+
+**Hypothesis**: yamux may need to run on the TLS socket, not the raw TCP socket. `YamuxConnectionManager` currently passes `rawSocket` to `YamuxSession` based on the assumption that Go any-sync drops TLS after the handshake. If Go any-sync actually keeps yamux on the TLS session, Android yamux bytes arrive on the raw socket while filenode expects them on the TLS session — filenode sees unencrypted yamux bytes, reports "not a handshake message", and ignores the connection. The 7 bytes Android receives might be the TLS alert leaking through the raw socket read.
+
+**Next investigation step**: Check `any-sync/net/transport/yamux/yamux.go` `Dial()` function — does it use `conn` (raw TCP) or `sc` (TLS) for the yamux dialer? Also add logcat logging to confirm `rawSocket != null` and its socket type.
 
 ### Test Counts
 - **BUILD SUCCESSFUL** — all 429 unit tests pass (including 12 yamux test fixes for byte-layout corrections)
