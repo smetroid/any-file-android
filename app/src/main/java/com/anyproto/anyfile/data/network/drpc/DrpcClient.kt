@@ -182,23 +182,24 @@ class DrpcClient @Inject constructor(
         request: MessageLite
     ) {
         try {
-            // Create DRPC request
-            val drpcRequest = DrpcRequest(
-                serviceId = service,
-                methodId = method,
-                request = request
-            )
+            val rpcPath = "/$service/$method"
+            val requestBytes = request.toByteArray()
+            val streamId = 1L
+            var msgId = 1L
 
-            // Encode the request
-            val encodedRequest = drpcRequest.encode()
+            // Build all three DRPC frames
+            val invokeFrame = DrpcWireFrame(DrpcWireKind.Invoke, streamId, msgId++, true, rpcPath.toByteArray(Charsets.UTF_8)).encode()
+            val msgFrame    = DrpcWireFrame(DrpcWireKind.Message, streamId, msgId++, true, requestBytes).encode()
+            val csFrame     = DrpcWireFrame(DrpcWireKind.CloseSend, streamId, msgId, true, ByteArray(0)).encode()
 
-            // Add length prefix for framing
-            val framedRequest = DrpcEncoding.encodeMessageWithLength(encodedRequest)
+            // Send all frames in one write so they arrive in a single yamux DATA frame.
+            // Sending them separately allows coroutine scheduling gaps between writes;
+            // Go's DRPC server processes the Invoke alone and responds before Message arrives.
+            val allFrames = invokeFrame + msgFrame + csFrame
+            Log.d(TAG, "SEND frames hex=${allFrames.take(64).joinToString("") { "%02x".format(it) }}")
+            stream.write(allFrames)
 
-            // Send over the stream
-            stream.write(framedRequest)
-
-            // Signal end of request
+            // Close the yamux write side
             stream.closeWrite()
         } catch (e: DrpcEncodingException) {
             throw e
@@ -225,35 +226,12 @@ class DrpcClient @Inject constructor(
         responseParser: Parser<T>
     ): T {
         try {
-            // Read all response data from stream
             val responseData = readAllData(stream)
-
-            if (responseData.isEmpty()) {
-                throw DrpcInvalidResponseException("Empty response received from server")
-            }
-
-            // Decode the message with length prefix
-            val (messageData, _) = DrpcEncoding.decodeMessageWithLength(responseData)
-
-            // Decode DRPC response
-            val decodedResponse = DrpcResponse.decode(messageData)
-
-            // Check if the call was successful
-            if (!decodedResponse.success) {
-                val errorMsg = if (decodedResponse.payload.isNotEmpty()) {
-                    String(decodedResponse.payload)
-                } else {
-                    "Unknown error"
-                }
-                throw DrpcRpcException(
-                    code = decodedResponse.errorCode,
-                    message = errorMsg
-                )
-            }
-
-            // Parse the protobuf response (empty payload is valid for default messages)
-            try {
-                return responseParser.parseFrom(decodedResponse.payload)
+            // parseMessagePayloads throws DrpcRpcException on KindError frames
+            val payloads = DrpcWireFrame.parseMessagePayloads(responseData)
+            val payload = payloads.firstOrNull() ?: ByteArray(0)
+            return try {
+                responseParser.parseFrom(payload)
             } catch (e: Exception) {
                 throw DrpcParseException("Failed to parse protobuf response", e)
             }
@@ -341,6 +319,7 @@ class DrpcClient @Inject constructor(
                 stream.waitForOpen()
                 sendRequest(stream, service, method, request)
                 val allData = readAllData(stream)
+                Log.d(TAG, "Streaming rawBytes=${allData.size} hex=${allData.take(64).joinToString("") { "%02x".format(it) }}")
                 decodeStreamingResponses(allData, responseParser)
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -364,19 +343,9 @@ class DrpcClient @Inject constructor(
         responseParser: Parser<T>
     ): List<T> {
         if (data.isEmpty()) return emptyList()
-        val results = mutableListOf<T>()
-        var offset = 0
-        while (offset < data.size) {
-            val (messageData, bytesRead) = DrpcEncoding.decodeMessageWithLength(data, offset)
-            offset += bytesRead
-            val decoded = DrpcResponse.decode(messageData)
-            if (!decoded.success) {
-                val errorMsg = if (decoded.payload.isNotEmpty()) String(decoded.payload) else "Unknown error"
-                throw DrpcRpcException(code = decoded.errorCode, message = errorMsg)
-            }
-            results.add(responseParser.parseFrom(decoded.payload))
-        }
-        return results
+        // parseMessagePayloads throws DrpcRpcException on KindError frames
+        val payloads = DrpcWireFrame.parseMessagePayloads(data)
+        return payloads.map { responseParser.parseFrom(it) }
     }
 
     /**
