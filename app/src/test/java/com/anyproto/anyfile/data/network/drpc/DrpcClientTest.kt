@@ -83,11 +83,9 @@ class DrpcClientTest {
         coEvery { mockStream.closeWrite() } just Runs
         coEvery { mockStream.close() } just Runs
 
-        // Simulate response: encode a successful response
-        val responsePayload = expectedResponse.toByteArray()
-        val drpcResponse = DrpcResponse(success = true, response = expectedResponse)
-        val encodedResponse = drpcResponse.encode()
-        val framedResponse = DrpcEncoding.encodeMessageWithLength(encodedResponse)
+        // Simulate response: Storj DRPC KindMessage frame containing the protobuf response
+        val responseBytes = expectedResponse.toByteArray()
+        val framedResponse = DrpcWireFrame(DrpcWireKind.Message, 1L, 1L, true, responseBytes).encode()
 
         // Mock read to return response data then null (stream closed)
         coEvery { mockStream.read(any()) } returnsMany listOf(framedResponse, null)
@@ -126,15 +124,12 @@ class DrpcClientTest {
         coEvery { mockStream.closeWrite() } just Runs
         coEvery { mockStream.close() } just Runs
 
-        // Simulate error response
+        // Simulate error response: Storj DRPC KindError frame (8-byte big-endian code + message)
         val errorMsg = "Space not found"
-        val drpcResponse = DrpcResponse(
-            success = false,
-            errorCode = DrpcMessage.ErrorCode.METHOD_NOT_FOUND,
-            errorMessage = errorMsg
-        )
-        val encodedResponse = drpcResponse.encode()
-        val framedResponse = DrpcEncoding.encodeMessageWithLength(encodedResponse)
+        val code = DrpcMessage.ErrorCode.METHOD_NOT_FOUND.toLong()
+        val codeBytes = ByteArray(8) { i -> ((code ushr ((7 - i) * 8)) and 0xFF).toByte() }
+        val errorData = codeBytes + errorMsg.toByteArray(Charsets.UTF_8)
+        val framedResponse = DrpcWireFrame(DrpcWireKind.Error, 1L, 1L, true, errorData).encode()
 
         coEvery { mockStream.read(any()) } returnsMany listOf(framedResponse, null)
         every { mockStream.state } returns YamuxStream.State.CLOSED
@@ -230,10 +225,8 @@ class DrpcClientTest {
         coEvery { mockStream.closeWrite() } just Runs
         coEvery { mockStream.close() } just Runs
 
-        val responsePayload = expectedResponse.toByteArray()
-        val drpcResponse = DrpcResponse(success = true, response = expectedResponse)
-        val encodedResponse = drpcResponse.encode()
-        val framedResponse = DrpcEncoding.encodeMessageWithLength(encodedResponse)
+        val responseBytes = expectedResponse.toByteArray()
+        val framedResponse = DrpcWireFrame(DrpcWireKind.Message, 1L, 1L, true, responseBytes).encode()
 
         coEvery { mockStream.read(any()) } returnsMany listOf(framedResponse, null)
         every { mockStream.state } returns YamuxStream.State.CLOSED

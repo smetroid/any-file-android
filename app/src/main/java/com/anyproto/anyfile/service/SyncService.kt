@@ -114,7 +114,9 @@ class SyncService : Service() {
                 try {
                     val spaceId = networkConfigRepository.spaceId
                     if (spaceId != null) {
-                        val remoteIds = fn.filesGet(spaceId).getOrNull() ?: emptyList()
+                        val filesGetResult = fn.filesGet(spaceId)
+                        val remoteIds = filesGetResult.getOrNull() ?: emptyList()
+                        Log.d(TAG, "Poll: spaceId=${spaceId.take(20)}... filesGet=${filesGetResult.isSuccess} count=${remoteIds.size} ids=$remoteIds err=${filesGetResult.exceptionOrNull()?.message}")
                         for (fileId in remoteIds) {
                             if (fileId !in localFileIds) {
                                 // fileId = "relPath|base58btc(CID)" — Go's buildFileID convention

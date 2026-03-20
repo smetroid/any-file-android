@@ -254,6 +254,114 @@ data class DecodedDrpcResponse(
 )
 
 /**
+ * Storj DRPC wire frame kinds.
+ * See storj.io/drpc drpcwire.Kind.
+ */
+enum class DrpcWireKind(val value: Int) {
+    Invoke(1),
+    Message(2),
+    Error(3),
+    Cancel(4),
+    Close(5),
+    CloseSend(6),
+    InvokeMetadata(7);
+    companion object {
+        fun fromValue(v: Int): DrpcWireKind? = values().find { it.value == v }
+    }
+}
+
+/**
+ * Storj DRPC wire frame.
+ *
+ * Wire encoding: [control_byte] [stream_id_varint64] [msg_id_varint64] [data_len_varint64] [data]
+ * control_byte = (kind.value shl 1) or (if done 1 else 0)
+ *
+ * See storj.io/drpc drpcwire.AppendFrame / ParseFrame.
+ */
+data class DrpcWireFrame(
+    val kind: DrpcWireKind,
+    val streamId: Long,
+    val messageId: Long,
+    val done: Boolean,
+    val data: ByteArray
+) {
+    fun encode(): ByteArray {
+        val out = ByteArrayOutputStream()
+        val control = (kind.value shl 1) or (if (done) 1 else 0)
+        out.write(control)
+        DrpcEncoding.writeVarInt64(out, streamId)
+        DrpcEncoding.writeVarInt64(out, messageId)
+        DrpcEncoding.writeVarInt64(out, data.size.toLong())
+        out.write(data)
+        return out.toByteArray()
+    }
+
+    companion object {
+        /**
+         * Parse one DRPC wire frame from [buf] at [offset].
+         * @return Pair(frame, bytesConsumed) or null if buffer is incomplete.
+         */
+        fun parse(buf: ByteArray, offset: Int = 0): Pair<DrpcWireFrame, Int>? {
+            if (buf.size - offset < 1) return null
+            var pos = offset
+            val control = buf[pos++].toInt() and 0xFF
+            val done = (control and 0x01) != 0
+            val kindValue = (control and 0x7E) shr 1
+            val kind = DrpcWireKind.fromValue(kindValue) ?: return null
+
+            val (streamId, sLen) = DrpcEncoding.readVarInt64(buf, pos) ?: return null; pos += sLen
+            val (msgId, mLen)    = DrpcEncoding.readVarInt64(buf, pos) ?: return null; pos += mLen
+            val (dataLen, dLen)  = DrpcEncoding.readVarInt64(buf, pos) ?: return null; pos += dLen
+
+            if (buf.size - pos < dataLen.toInt()) return null
+            val data = buf.copyOfRange(pos, pos + dataLen.toInt())
+            pos += dataLen.toInt()
+
+            return Pair(DrpcWireFrame(kind, streamId, msgId, done, data), pos - offset)
+        }
+
+        /**
+         * Parse accumulated DRPC wire data and return payloads from KindMessage frames.
+         * Throws DrpcRpcException on KindError. Stops at KindClose or end of data.
+         */
+        fun parseMessagePayloads(data: ByteArray): List<ByteArray> {
+            val payloads = mutableListOf<ByteArray>()
+            var offset = 0
+            while (offset < data.size) {
+                val (frame, bytesRead) = parse(data, offset) ?: break
+                offset += bytesRead
+                when (frame.kind) {
+                    DrpcWireKind.Message -> payloads.add(frame.data)
+                    DrpcWireKind.Error -> {
+                        // Wire error format: 8-byte big-endian code + UTF-8 message
+                        val code = if (frame.data.size >= 8)
+                            ((frame.data[0].toLong() and 0xFF) shl 56) or
+                            ((frame.data[1].toLong() and 0xFF) shl 48) or
+                            ((frame.data[2].toLong() and 0xFF) shl 40) or
+                            ((frame.data[3].toLong() and 0xFF) shl 32) or
+                            ((frame.data[4].toLong() and 0xFF) shl 24) or
+                            ((frame.data[5].toLong() and 0xFF) shl 16) or
+                            ((frame.data[6].toLong() and 0xFF) shl 8)  or
+                            (frame.data[7].toLong() and 0xFF)
+                        else 0L
+                        val msg = if (frame.data.size > 8) String(frame.data, 8, frame.data.size - 8) else String(frame.data)
+                        throw DrpcRpcException(code = code.toInt(), message = msg)
+                    }
+                    DrpcWireKind.Close -> break
+                    else -> {} // skip Invoke, Cancel, CloseSend, InvokeMetadata
+                }
+            }
+            return payloads
+        }
+    }
+
+    override fun equals(other: Any?) = other is DrpcWireFrame &&
+        kind == other.kind && streamId == other.streamId && messageId == other.messageId &&
+        done == other.done && data.contentEquals(other.data)
+    override fun hashCode() = 31 * (31 * (31 * (31 * kind.hashCode() + streamId.hashCode()) + messageId.hashCode()) + done.hashCode()) + data.contentHashCode()
+}
+
+/**
  * Utility functions for varint encoding/decoding.
  */
 object DrpcEncoding {
@@ -267,6 +375,37 @@ object DrpcEncoding {
             v = v ushr 7
         }
         output.write(v)
+    }
+
+    /**
+     * Write a varint64 (LEB128) to a ByteArrayOutputStream.
+     */
+    fun writeVarInt64(output: ByteArrayOutputStream, value: Long) {
+        var v = value
+        while (v and -0x80L != 0L) {
+            output.write(((v and 0x7F) or 0x80).toInt())
+            v = v ushr 7
+        }
+        output.write((v and 0x7F).toInt())
+    }
+
+    /**
+     * Read a varint64 (LEB128) from a byte array.
+     * @return Pair(value, bytesRead) or null if buffer is incomplete.
+     */
+    fun readVarInt64(data: ByteArray, offset: Int): Pair<Long, Int>? {
+        var result = 0L
+        var shift = 0
+        var bytesRead = 0
+        while (offset + bytesRead < data.size) {
+            val b = data[offset + bytesRead].toInt() and 0xFF
+            bytesRead++
+            result = result or ((b and 0x7F).toLong() shl shift)
+            if ((b and 0x80) == 0) return Pair(result, bytesRead)
+            shift += 7
+            if (shift >= 64) return null
+        }
+        return null
     }
 
     /**
