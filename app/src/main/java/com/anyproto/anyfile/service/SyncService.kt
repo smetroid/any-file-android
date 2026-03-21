@@ -100,7 +100,7 @@ class SyncService : Service() {
 
             val (coordHost, coordPort) = networkConfigRepository.getCoordinatorAddress()
             val (fnHost, fnPort) = networkConfigRepository.getFilenodeAddress()
-            val syncDir = File(filesDir, "sync").also { it.mkdirs() }
+            val syncDir = (getExternalFilesDir(null) ?: File(filesDir, "sync")).also { it.mkdirs() }
 
             updateNotification("Connecting...")
             syncClient.connectCoordinator(coordHost, coordPort)
