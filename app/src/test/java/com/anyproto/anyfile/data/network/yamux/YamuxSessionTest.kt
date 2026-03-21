@@ -2,6 +2,8 @@ package com.anyproto.anyfile.data.network.yamux
 
 import io.mockk.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -10,6 +12,7 @@ import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.Socket
 import javax.net.ssl.SSLSocket
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -441,6 +444,77 @@ class YamuxSessionTest {
         // Verify even numbers
         assertTrue(stream1.streamId % 2 == 0)
         assertTrue(stream2.streamId % 2 == 0)
+    }
+
+    // -------------------------------------------------------------------------
+    // Regression test: writeMutex serializes concurrent sendFrame calls
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun `test sendFrame with concurrent calls produces complete non-corrupted frames`() = runTest {
+        // Regression test for the writeMutex added on 2026-03-19.
+        //
+        // Without the mutex, concurrent coroutines calling sendFrame() could have
+        // their writes interleaved on the TCP socket. The writeMutex serializes
+        // all writeFrame() calls so each frame's bytes arrive contiguously.
+        //
+        // We verify this by launching N concurrent sendFrame() calls against a
+        // real ByteArrayOutputStream and checking that the output contains exactly
+        // N intact frames (each with the expected payload length in its header).
+
+        val capturedOutput = ByteArrayOutputStream()
+        val blockingInput = mockk<InputStream>()
+        every { blockingInput.read(any<ByteArray>(), any(), any()) } returns -1  // EOF immediately
+
+        val plainSocket = mockk<Socket>(relaxed = true)
+        every { plainSocket.getInputStream() }  returns blockingInput
+        every { plainSocket.getOutputStream() } returns capturedOutput
+
+        // Create a session backed by the real output stream.
+        // Use the UnconfinedTestDispatcher so coroutines run eagerly in the test.
+        val concurrentSession = YamuxSession(plainSocket, isClient = true, coroutineContext = testDispatcher)
+
+        val frameCount = 8
+        val payloadSize = 64   // bytes per frame payload
+
+        // Launch frameCount coroutines simultaneously, each writing one DATA frame.
+        (1..frameCount).map { streamId ->
+            launch {
+                concurrentSession.sendFrame(
+                    YamuxFrame.Data(
+                        streamId = streamId,
+                        flags = emptySet(),
+                        data = ByteArray(payloadSize) { streamId.toByte() }
+                    )
+                )
+            }
+        }.joinAll()
+
+        // Each frame = 12-byte header + payloadSize bytes of payload.
+        val frameSize = 12 + payloadSize
+        val output = capturedOutput.toByteArray()
+
+        assertEquals(frameCount * frameSize, output.size,
+            "Expected exactly $frameCount frames of $frameSize bytes; got ${output.size} bytes total. " +
+            "A mismatch suggests frames were dropped or written incorrectly.")
+
+        // Parse each frame and verify the length field is correct (frames not truncated).
+        for (i in 0 until frameCount) {
+            val off = i * frameSize
+            // Yamux header layout per YamuxProtocol.encodeDataFrame (12 bytes, big-endian):
+            //   [0]     version
+            //   [1]     type
+            //   [2-3]   flags
+            //   [4-7]   streamId
+            //   [8-11]  length  (payload size for DATA frames)
+            val length = ((output[off + 8].toInt() and 0xFF) shl 24) or
+                         ((output[off + 9].toInt() and 0xFF) shl 16) or
+                         ((output[off + 10].toInt() and 0xFF) shl 8)  or
+                          (output[off + 11].toInt() and 0xFF)
+            assertEquals(payloadSize, length,
+                "Frame $i at offset $off has unexpected payload length $length (expected $payloadSize). " +
+                "Frames may have been interleaved.")
+        }
     }
 }
 

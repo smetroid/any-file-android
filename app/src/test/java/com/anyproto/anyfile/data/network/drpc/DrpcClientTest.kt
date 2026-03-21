@@ -217,6 +217,57 @@ class DrpcClientTest {
     }
 
     @Test
+    fun `test closeWrite called in finally only after response is read not during sendRequest`() = runTest {
+        // Regression test for the 2026-03-21 blockPush fix.
+        //
+        // sendRequest() must NOT call stream.closeWrite(). A premature FIN causes
+        // Go's DRPC manageReader to cancel the handler context before slow operations
+        // (e.g. blockPush acquiring a Redis lock) complete → "RequestCanceled".
+        //
+        // The only correct place for closeWrite() is in callAsync's finally block,
+        // AFTER readResponse() has returned.  We verify this by using
+        // coVerifySequence which asserts both presence and order.
+        val request = SpaceSignRequest.newBuilder()
+            .setSpaceId("test-space-id")
+            .build()
+
+        val expectedResponse = SpaceSignResponse.newBuilder().build()
+
+        coEvery { mockSession.openStream() } returns mockStream
+        coEvery { mockStream.waitForOpen() } just Runs
+        coEvery { mockStream.write(any()) } just Runs
+        coEvery { mockStream.closeWrite() } just Runs
+        coEvery { mockStream.close() } just Runs
+
+        val responseBytes = expectedResponse.toByteArray()
+        val framedResponse = DrpcWireFrame(DrpcWireKind.Message, 1L, 1L, true, responseBytes).encode()
+        val ackBytes = byteArrayOf(0x02, 0x00, 0x00, 0x00, 0x00)
+        coEvery { mockStream.read(any()) } returnsMany listOf(ackBytes, framedResponse, null)
+
+        // Stream stays OPEN → finally block WILL call closeWrite() once
+        every { mockStream.state } returns YamuxStream.State.OPEN
+
+        drpcClient.callAsync(
+            service = "coordinator.Coordinator",
+            method = "SpaceSign",
+            request = request,
+            responseParser = SpaceSignResponse.parser()
+        )
+
+        // closeWrite() called exactly once — only in the finally block
+        coVerify(exactly = 1) { mockStream.closeWrite() }
+
+        // Key ordering: sendRequest (write DRPC frames) → read response → closeWrite.
+        // coVerifyOrder is non-exhaustive: it only asserts these calls happen in
+        // this relative order, ignoring other calls in between (e.g. handshake).
+        coVerifyOrder {
+            mockStream.write(any())  // sendRequest — all DRPC frames, no closeWrite here
+            mockStream.read(any())   // response frame
+            mockStream.closeWrite()  // finally block — AFTER reading the response
+        }
+    }
+
+    @Test
     fun `test coordinatorCall extension function`() = runTest {
         val request = SpaceSignRequest.newBuilder()
             .setSpaceId("test-space-id")
