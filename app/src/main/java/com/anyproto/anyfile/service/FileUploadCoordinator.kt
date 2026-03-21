@@ -34,6 +34,7 @@ class FileUploadCoordinator @Inject constructor(
             val cid = CidUtils.computeBlake3Cid(data)
             // fileId = "relPath|base58btc(CID bytes)" — matches Go's buildFileID convention
             val fileId = "${File(path).name}|${Base58Btc.encode(cid)}"
+            Log.d(TAG, "Uploading ${File(path).name}: dataLen=${data.size} cidHex=${cid.joinToString("") { "%02x".format(it) }}")
             filenodeClient.blockPush(spaceId, fileId, cid, data)
                 .onSuccess {
                     Log.d(TAG, "Uploaded $fileId (${File(path).name}) to space $spaceId")

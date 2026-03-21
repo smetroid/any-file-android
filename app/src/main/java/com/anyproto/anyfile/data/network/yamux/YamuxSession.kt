@@ -9,6 +9,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.io.OutputStream
@@ -107,6 +109,8 @@ class YamuxSession(
 
     // Session state
     private val lock = ReentrantLock()
+    // Serializes all frame writes so concurrent coroutines can't interleave bytes on the wire
+    private val writeMutex = Mutex()
     private var _state = State.ACTIVE
     val state: State get() = _state
 
@@ -146,10 +150,6 @@ class YamuxSession(
             check(_state == State.ACTIVE) { "Session already started or closed" }
         }
 
-        Log.d(TAG, "=== Starting YamuxSession ===")
-        Log.d(TAG, "Mode: ${if (isClient) "Client" else "Server"}")
-        Log.d(TAG, "Remote: ${socket.inetAddress?.hostAddress}:${socket.port}")
-
         // Start frame reader job
         frameReaderJob = launch {
             try {
@@ -160,7 +160,6 @@ class YamuxSession(
             }
         }
 
-        Log.d(TAG, "YamuxSession started, frame reader running")
     }
 
     /**
@@ -181,12 +180,13 @@ class YamuxSession(
             }
         }
 
-        // Allocate stream ID
-        val streamId = lock.withLock { nextStreamId }.also {
-            lock.withLock { nextStreamId += STREAM_ID_INCREMENT }
+        // Allocate stream ID — read and increment in one lock to prevent duplicate IDs
+        // when multiple coroutines call openStream() concurrently.
+        val streamId = lock.withLock {
+            val id = nextStreamId
+            nextStreamId += STREAM_ID_INCREMENT
+            id
         }
-
-        Log.d(TAG, "Opening new stream: streamId=$streamId")
 
         // Create stream
         val stream = YamuxStream(streamId, this@YamuxSession)
@@ -195,7 +195,6 @@ class YamuxSession(
         // Initialize stream (sends SYN)
         try {
             stream.initialize()
-            Log.d(TAG, "Stream opened successfully: streamId=$streamId")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize stream: streamId=$streamId", e)
             lock.withLock { streamsMap.remove(streamId) }
@@ -337,8 +336,10 @@ class YamuxSession(
             }
         }
 
-        withContext(Dispatchers.IO) {
-            YamuxProtocol.writeFrame(outputStream, frame)
+        writeMutex.withLock {
+            withContext(Dispatchers.IO) {
+                YamuxProtocol.writeFrame(outputStream, frame)
+            }
         }
     }
 
@@ -416,13 +417,6 @@ class YamuxSession(
      * @param frame The frame to handle
      */
     private suspend fun handleFrame(frame: YamuxFrame) {
-        // Debug: log all received yamux frames
-        when (frame) {
-            is YamuxFrame.Data -> android.util.Log.d(TAG, "RECV DATA sid=${frame.streamId} flags=${frame.flags} len=${frame.data.size} hex=${frame.data.take(16).joinToString("") { "%02x".format(it) }}")
-            is YamuxFrame.WindowUpdate -> android.util.Log.d(TAG, "RECV WINUPDATE sid=${frame.streamId} flags=${frame.flags} delta=${frame.delta}")
-            is YamuxFrame.Ping -> android.util.Log.d(TAG, "RECV PING flags=${frame.flags} val=${frame.value}")
-            is YamuxFrame.GoAway -> android.util.Log.d(TAG, "RECV GOAWAY code=${frame.errorCode}")
-        }
         when (frame) {
             is YamuxFrame.Data -> handleDataFrame(frame)
             is YamuxFrame.WindowUpdate -> handleWindowUpdateFrame(frame)

@@ -112,11 +112,7 @@ class DrpcClient @Inject constructor(
         responseParser: Parser<T>,
         timeoutMs: Long = defaultTimeoutMs
     ): T = withContext(Dispatchers.IO) {
-        Log.d(TAG, "=== DRPC Call: $service.$method ===")
-        Log.d(TAG, "Request type: ${request.javaClass.simpleName}")
-
         val stream = try {
-            Log.d(TAG, "Opening yamux stream for RPC call...")
             session.openStream()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open yamux stream", e)
@@ -126,22 +122,11 @@ class DrpcClient @Inject constructor(
         try {
             withTimeout(timeoutMs) {
                 // Wait for the stream to become OPEN (receive ACK for outbound streams)
-                Log.d(TAG, "Waiting for stream to become OPEN...")
                 stream.waitForOpen()
-                Log.d(TAG, "Stream is OPEN, ready to send data")
-
                 // Perform per-stream protocol handshake (required by any-sync before DRPC)
                 performStreamHandshake(stream)
-
-                // Send the request
-                Log.d(TAG, "Sending DRPC request...")
                 sendRequest(stream, service, method, request)
-                Log.d(TAG, "DRPC request sent successfully")
-
-                // Read and parse the response
-                Log.d(TAG, "Reading DRPC response...")
                 val response = readResponse(stream, responseParser)
-                Log.d(TAG, "DRPC response received: ${response.javaClass.simpleName}")
                 response
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -188,7 +173,6 @@ class DrpcClient @Inject constructor(
     private suspend fun performStreamHandshake(stream: YamuxStream) {
         // Send empty Proto frame (no encodings → no Snappy)
         stream.write(byteArrayOf(0x03, 0x00, 0x00, 0x00, 0x00))
-        Log.d(TAG, "Stream handshake: sent Proto frame")
 
         // Read server response (Ack or Proto)
         val response = stream.read(timeoutMs = 5000)
@@ -204,8 +188,6 @@ class DrpcClient @Inject constructor(
                          ((response[3].toInt() and 0xFF) shl 16) or
                          ((response[4].toInt() and 0xFF) shl 24)
 
-        Log.d(TAG, "Stream handshake: response type=0x${msgType.toString(16)} payloadSize=$payloadSize")
-
         when (msgType) {
             0x02 -> {
                 // Ack — check for error
@@ -217,11 +199,9 @@ class DrpcClient @Inject constructor(
                         throw DrpcConnectionException("Proto handshake rejected by server: ${ack.error}")
                     }
                 }
-                Log.d(TAG, "Stream handshake complete: Ack(Null) — no Snappy, ready for DRPC")
             }
             0x03 -> {
                 // Proto response — server chose encoding; we sent no encodings so no Snappy
-                Log.d(TAG, "Stream handshake complete: Proto response")
             }
             else -> {
                 val hex = response.take(8).joinToString("") { "%02x".format(it) }
@@ -261,11 +241,12 @@ class DrpcClient @Inject constructor(
             // Sending them separately allows coroutine scheduling gaps between writes;
             // Go's DRPC server processes the Invoke alone and responds before Message arrives.
             val allFrames = invokeFrame + msgFrame + csFrame
-            Log.d(TAG, "SEND frames hex=${allFrames.take(64).joinToString("") { "%02x".format(it) }}")
             stream.write(allFrames)
-
-            // Close the yamux write side
-            stream.closeWrite()
+            // NOTE: Do NOT call stream.closeWrite() here. The DRPC CloseSend frame above
+            // already signals "client done sending" to the server. Sending the TCP FIN now
+            // would cause Go's DRPC manageReader to cancel the handler context before the
+            // server has finished processing (e.g. acquiring Redis locks in blockPush).
+            // The TCP half-close is sent by callAsync's finally block AFTER reading the response.
         } catch (e: DrpcEncodingException) {
             throw e
         } catch (e: YamuxStreamException) {
@@ -295,6 +276,9 @@ class DrpcClient @Inject constructor(
             // parseMessagePayloads throws DrpcRpcException on KindError frames
             val payloads = DrpcWireFrame.parseMessagePayloads(responseData)
             val payload = payloads.firstOrNull() ?: ByteArray(0)
+            if (responseData.isEmpty()) {
+                throw DrpcConnectionException("Server closed stream without sending a response")
+            }
             return try {
                 responseParser.parseFrom(payload)
             } catch (e: Exception) {
@@ -371,8 +355,6 @@ class DrpcClient @Inject constructor(
         responseParser: Parser<T>,
         timeoutMs: Long = defaultTimeoutMs
     ): List<T> = withContext(Dispatchers.IO) {
-        Log.d(TAG, "=== DRPC Streaming Call: $service.$method ===")
-
         val stream = try {
             session.openStream()
         } catch (e: Exception) {
@@ -385,7 +367,6 @@ class DrpcClient @Inject constructor(
                 performStreamHandshake(stream)
                 sendRequest(stream, service, method, request)
                 val allData = readAllData(stream)
-                Log.d(TAG, "Streaming rawBytes=${allData.size} hex=${allData.take(64).joinToString("") { "%02x".format(it) }}")
                 decodeStreamingResponses(allData, responseParser)
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {

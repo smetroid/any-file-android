@@ -109,6 +109,15 @@ class SyncService : Service() {
             updateNotification("Syncing")
             startFileWatcher(syncDir.absolutePath)
 
+            // Upload any files already in syncDir sequentially to avoid Redis lock contention:
+            // filenode's per-account limit check uses a single distributed lock, so concurrent
+            // blockPush calls for the same account all fail to acquire it.
+            serviceScope.launch {
+                syncDir.listFiles()?.filter { it.isFile }?.forEach { file ->
+                    uploadCoordinator.upload(file.absolutePath)
+                }
+            }
+
             val localFileIds = mutableSetOf<String>()
             while (serviceScope.isActive) {
                 try {
