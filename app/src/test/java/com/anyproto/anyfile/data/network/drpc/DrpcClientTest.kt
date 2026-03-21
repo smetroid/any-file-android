@@ -108,7 +108,9 @@ class DrpcClientTest {
         // Verify interactions
         coVerify { mockSession.openStream() }
         coVerify { mockStream.write(any()) }
-        coVerify { mockStream.closeWrite() }
+        // closeWrite() is called by the finally block only when stream is not already CLOSED;
+        // here the mock returns CLOSED so no extra closeWrite call is expected
+        coVerify(exactly = 0) { mockStream.closeWrite() }
     }
 
     @Test
